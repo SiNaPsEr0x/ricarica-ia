@@ -1,0 +1,854 @@
+# =============================================================================
+#  Ricarica IA  -  limite di carica automatico per auto MG + wallbox Silla Prism
+#  Stack Docker Compose (testato su Portainer / Raspberry Pi)
+#
+#  DA IMPOSTARE (vedi README):
+#    - SAIC_USER / SAIC_PASSWORD  -> variabili d'ambiente dello stack (account MG iSMART)
+#    - PRISM_TOPIC / PRISM_PORT   -> devono combaciare con le impostazioni MQTT della Prism
+#    - BATTERY_KWH / TARGET_SOC   -> capacita' della tua batteria e limite desiderato
+# =============================================================================
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    ports:
+      - "1883:1883"
+    configs:
+      - source: mosquitto_conf
+        target: /mosquitto/config/mosquitto.conf
+    volumes:
+      - mosq_data:/mosquitto/data
+
+  saic-gateway:
+    image: saicismartapi/saic-python-mqtt-gateway:latest
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    depends_on: [mosquitto]
+    environment:
+      SAIC_USER: "${SAIC_USER}"
+      SAIC_PASSWORD: "${SAIC_PASSWORD}"
+      MQTT_URI: "tcp://mosquitto:1883"
+      HA_DISCOVERY_ENABLED: "False"
+      TZ: Europe/Rome
+
+  ev-limiter:
+    image: python:3.12-slim
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: 128m
+    cpus: 0.3
+    pids_limit: 100
+    depends_on: [mosquitto]
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "8088:8080"
+    environment:
+      MQTT_HOST: mosquitto
+      PRISM_TOPIC: "home/prism/"
+      PRISM_PORT: "1"
+      BATTERY_KWH: "51"
+      TARGET_SOC: "80"
+      AUTO_ARM: "true"
+      ACQUIRE_SEC: "300"
+      GW_OFF: "true"
+      TZ: Europe/Rome
+    volumes:
+      - pydeps:/deps
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    configs:
+      - source: limiter_py
+        target: /app/app.py
+    command: sh -c "[ -d /deps/paho ] || pip install --default-timeout=60 --retries 10 --target /deps paho-mqtt==2.1.0; PYTHONPATH=/deps python -u /app/app.py"
+
+volumes:
+  mosq_data:
+  pydeps:
+
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1380"
+
+configs:
+  mosquitto_conf:
+    content: |
+      listener 1883
+      allow_anonymous true
+      persistence true
+      persistence_location /mosquitto/data/
+      log_dest stdout
+      log_type error
+      log_type warning
+  limiter_py:
+    content: |
+      import calendar, http.client, json, os, re, socket, struct, threading, time, zlib
+      from collections import deque
+      from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+      import paho.mqtt.client as mqtt
+
+      BROKER = os.getenv("MQTT_HOST", "mosquitto")
+      PRISM = os.getenv("PRISM_TOPIC", "prism/")
+      if not PRISM.endswith("/"):
+          PRISM += "/"
+      PORT_N = os.getenv("PRISM_PORT", "1")
+      CAP = float(os.getenv("BATTERY_KWH", "51"))
+      EFF = float(os.getenv("CHARGE_EFFICIENCY", "0.92"))
+      DEF_TARGET = int(os.getenv("TARGET_SOC", "80"))
+      AUTO_ARM = os.getenv("AUTO_ARM", "true").lower() == "true"
+      GW_OFF = os.getenv("GW_OFF", "true").lower() == "true"
+      ACQUIRE_SEC = int(os.getenv("ACQUIRE_SEC", "300"))
+      REFRESH_SEC = int(os.getenv("REFRESH_SEC", "120"))
+      STALE_SEC = int(os.getenv("SOC_STALE_SEC", "600"))
+      EST_MARGIN = float(os.getenv("EST_MARGIN", "1.0"))
+      MAX_HOURS = 12
+      DOCK = "/var/run/docker.sock"
+      ANSI = re.compile(r"\x1b\[[0-9;]*m")
+      APP_NAME = "Ricarica IA"
+
+      FAV = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+             "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+             "<stop offset='0' stop-color='#1b2a3a'/><stop offset='1' stop-color='#0b0f14'/>"
+             "</linearGradient></defs>"
+             "<rect width='64' height='64' rx='14' fill='url(#g)'/>"
+             "<rect x='12' y='19' width='34' height='26' rx='6' fill='none' stroke='#38d66b' stroke-width='4'/>"
+             "<rect x='48' y='27' width='5' height='10' rx='2' fill='#38d66b'/>"
+             "<path d='M31 23 21 35h8l-3 9 12-14h-8z' fill='#38d66b'/></svg>")
+
+      MANIFEST = json.dumps({
+          "name": APP_NAME, "short_name": APP_NAME, "start_url": "/", "scope": "/",
+          "display": "standalone", "background_color": "#0b0f14", "theme_color": "#0b0f14",
+          "icons": [{"src": "/apple-touch-icon.png", "sizes": "180x180",
+                     "type": "image/png", "purpose": "any"}]})
+
+      # ---- icona PNG (iOS non usa le SVG per la schermata Home) ----
+      BOLT = [(31, 23), (21, 35), (29, 35), (26, 44), (38, 30), (30, 30)]
+      ICON = {}
+
+      def _rr(x, y, x0, y0, x1, y1, r):
+          if x < x0 or x > x1 or y < y0 or y > y1:
+              return False
+          dx = max(x0 + r - x, 0.0, x - (x1 - r))
+          dy = max(y0 + r - y, 0.0, y - (y1 - r))
+          return dx * dx + dy * dy <= r * r
+
+      def _poly(x, y, pts):
+          inside = False
+          j = len(pts) - 1
+          for i in range(len(pts)):
+              xi, yi = pts[i]
+              xj, yj = pts[j]
+              if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+                  inside = not inside
+              j = i
+          return inside
+
+      def _px(x, y):
+          if 10 <= x <= 53 and 17 <= y <= 47:
+              if _poly(x, y, BOLT) or _rr(x, y, 48, 27, 53, 37, 2) or \
+                      (_rr(x, y, 10, 17, 48, 47, 8) and not _rr(x, y, 14, 21, 44, 43, 4)):
+                  return (56, 214, 107)
+          g = (x + y) / 128.0
+          return (int(27 - 16 * g), int(42 - 27 * g), int(58 - 38 * g))
+
+      def icon_png(n=180):
+          if n in ICON:
+              return ICON[n]
+          ss = 2
+          k = 64.0 / (n * ss)
+          raw = bytearray()
+          for j in range(n):
+              raw.append(0)
+              for i in range(n):
+                  r = g = b = 0
+                  for sj in range(ss):
+                      y = (j * ss + sj + 0.5) * k
+                      for si in range(ss):
+                          pr, pg, pb = _px((i * ss + si + 0.5) * k, y)
+                          r += pr
+                          g += pg
+                          b += pb
+                  q = ss * ss
+                  raw += bytes((r // q, g // q, b // q))
+
+          def chunk(t, d):
+              return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+
+          png = (b"\x89PNG\r\n\x1a\n"
+                 + chunk(b"IHDR", struct.pack(">IIBBBBB", n, n, 8, 2, 0, 0, 0))
+                 + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+                 + chunk(b"IEND", b""))
+          ICON[n] = png
+          return png
+
+      STATES = ["idle", "waiting", "charging", "pause"]
+      MODES = ["solar", "normal", "paused", "hybrid", "suspended", "unknown", "unknown", "autolimit"]
+
+      def T(s):
+          return PRISM + PORT_N + "/" + s
+
+      TFILE = "/deps/target"
+
+      def load_target():
+          try:
+              with open(TFILE) as f:
+                  v = int(f.read().strip())
+              if 20 <= v <= 100:
+                  return v
+          except Exception:
+              pass
+          return DEF_TARGET
+
+      lock = threading.Lock()
+      LOG = deque(maxlen=120)
+      MQ = deque(maxlen=150)
+      S = dict(soc=None, soc_ts=0, prefix=None, pstate=None, pmode=None,
+               w=None, w_ts=0, armed=False, acquiring=False, target=load_target(),
+               start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
+               stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
+               base=load_target(), once=False, once_seen=False, once_idle=0)
+
+      def now_s():
+          return time.strftime("%H:%M:%S ")
+
+      def log(m):
+          LOG.append(now_s() + m)
+
+      def short(t):
+          return t.split("/vehicles/")[-1].split("/", 1)[-1] if "/vehicles/" in t else t
+
+      def idx(lst, p):
+          try:
+              return lst[int(float(p)) - 1]
+          except Exception:
+              return None
+
+      def _end_once_locked(why):
+          if S["once"]:
+              S["once"] = False
+              S["target"] = S["base"]
+              S["once_seen"] = False
+              S["once_idle"] = 0
+              log("100% una tantum " + why + ": target di nuovo " + str(S["target"]) + "%")
+
+      client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+
+      def on_connect(c, u, flags, rc, props):
+          for t in ("saic/+/vehicles/+/drivetrain/+", "saic/+/vehicles/+/refresh/#",
+                    T("state"), T("mode"), T("w")):
+              c.subscribe(t)
+          log("MQTT connesso")
+
+      def on_message(c, u, msg):
+          p = msg.payload.decode(errors="ignore").strip()
+          t = msg.topic
+          spawn = None
+          off_topic = None
+          if t.startswith("saic/") and not msg.retain:
+              MQ.append(now_s() + short(t) + " = " + p[:60])
+          with lock:
+              now = time.time()
+              if t.startswith("saic/") and "/drivetrain/" in t:
+                  S["prefix"] = t.split("/drivetrain/")[0]
+                  if t.endswith("/drivetrain/soc") and not msg.retain:
+                      try:
+                          S["soc"] = float(p)
+                          S["soc_ts"] = now
+                      except ValueError:
+                          pass
+              elif t.startswith("saic/") and t.endswith("/refresh/mode"):
+                  if GW_OFF and p == "periodic" and now - S["off_ts"] > 10:
+                      S["off_ts"] = now
+                      off_topic = t + "/set"
+              elif t == T("state"):
+                  prev = S["pstate"]
+                  S["pstate"] = idx(STATES, p)
+                  MQ.append(now_s() + "prism/state = " + str(S["pstate"]) + " (" + p + ")")
+                  if S["pstate"] == "idle":
+                      S["hold"] = False
+                      S["free"] = False
+                      if prev not in (None, "idle"):
+                          _end_once_locked("concluso (cavo scollegato)")
+                      if S["armed"]:
+                          S["armed"] = False
+                          log("Cavo scollegato: disarmato")
+                  plugged = S["pstate"] == "waiting" or \
+                      (prev == "idle" and S["pstate"] not in (None, "idle"))
+                  if AUTO_ARM and plugged and not S["acquiring"] and not S["armed"] \
+                          and not S["free"] and now - S["cmd_ts"] > 20:
+                      S["acquiring"] = True
+                      spawn = (now,)
+              elif t == T("mode"):
+                  S["pmode"] = idx(MODES, p)
+                  MQ.append(now_s() + "prism/mode = " + str(S["pmode"]) + " (" + p + ")")
+              elif t == T("w"):
+                  try:
+                      S["w"] = float(p)
+                      S["w_ts"] = now
+                  except ValueError:
+                      pass
+          if off_topic:
+              client.publish(off_topic, "off")
+              log("Gateway: polling periodico spento (refresh off)")
+          if spawn:
+              threading.Thread(target=auto_arm, args=spawn, daemon=True).start()
+
+      client.on_connect = on_connect
+      client.on_message = on_message
+
+      def set_mode(n):
+          S["cmd_ts"] = time.time()
+          MQ.append(now_s() + "TX prism set_mode " + str(n))
+          client.publish(T("command/set_mode"), str(n), qos=1)
+
+      def start_charge():
+          if S["pstate"] == "charging":
+              set_mode(2)
+          else:
+              set_mode(3)
+              time.sleep(3)
+              set_mode(2)
+
+      def estimate():
+          if S["start_soc"] is None:
+              return None
+          return S["start_soc"] + S["e_wh"] / 1000.0 * EFF / CAP * 100.0
+
+      def get_fresh_soc(since, max_wait, gap=30, gap_max=None, need_hold=False):
+          end = time.time() + max_wait
+          next_force = 0
+          g = gap
+          while time.time() < end:
+              with lock:
+                  prefix, ts, soc, ps = S["prefix"], S["soc_ts"], S["soc"], S["pstate"]
+                  hold = S["hold"]
+              if soc is not None and ts > since:
+                  return soc
+              if ps == "idle" or (need_hold and not hold):
+                  return None
+              if prefix and time.time() >= next_force:
+                  client.publish(prefix + "/refresh/mode/set", "force")
+                  next_force = time.time() + g
+                  if gap_max:
+                      g = min(g * 2, gap_max)
+              time.sleep(5)
+          return None
+
+      def arm(target, soc):
+          if not 20 <= target <= 100:
+              return False, "Target non valido"
+          if soc >= target:
+              return False, "SoC gia a %.0f%%: resto in pausa" % soc
+          with lock:
+              S.update(armed=True, target=target, start_soc=soc, soc0=soc, e_wh=0.0,
+                       armed_at=time.time(), cal_ts=time.time(), stop_tries=0,
+                       hold=False, free=False, src="")
+          start_charge()
+          log("Avvio da %.0f%% verso %d%%" % (soc, target))
+          return True, "Avviata da %.0f%%" % soc
+
+      def set_target(t, persist=True):
+          t = max(20, min(100, int(t)))
+          with lock:
+              S["target"] = t
+              if persist:
+                  S["base"] = t
+                  S["once"] = False
+          if persist:
+              try:
+                  with open(TFILE, "w") as f:
+                      f.write(str(t))
+              except Exception:
+                  pass
+          return t
+
+      def free_charge(why):
+          with lock:
+              S["armed"] = False
+              S["hold"] = False
+              S["free"] = True
+          log("Nessun limite (100%): carica libera, finisce la macchina - " + why)
+          start_charge()
+
+      def once100(on):
+          if not on:
+              with lock:
+                  _end_once_locked("annullato")
+                  base = S["base"]
+              return True, "Annullato: target " + str(base) + "%"
+          with lock:
+              S["once"] = True
+              S["target"] = 100
+              S["once_seen"] = False
+              S["once_idle"] = 0
+              ps = S["pstate"]
+              base = S["base"]
+          log("100% una tantum attivato: dopo la carica il target torna a " + str(base) + "%")
+          if ps not in (None, "idle"):
+              free_charge("100% una tantum")
+          return True, "100% solo questa volta"
+
+      def auto_arm(plug_ts):
+          with lock:
+              tgt = S["target"]
+          if tgt >= 100:
+              with lock:
+                  S["acquiring"] = False
+              free_charge("cavo collegato")
+              return
+          log("Cavo collegato: pausa e richiedo il SoC")
+          with lock:
+              S["hold"] = True
+          set_mode(3)
+          soc = get_fresh_soc(plug_ts, ACQUIRE_SEC, 60, 300, True)
+          if soc is None:
+              with lock:
+                  alive = S["hold"] and S["pstate"] != "idle"
+              if alive:
+                  log("SoC non ricevuto in %d s: resto in pausa e riprovo con pause crescenti (max 10 min)" % ACQUIRE_SEC)
+                  soc = get_fresh_soc(plug_ts, 30 * 24 * 3600, 300, 600, True)
+          with lock:
+              S["acquiring"] = False
+              go = S["hold"]
+              S["hold"] = False
+              tgt = S["target"]
+          if soc is None or not go:
+              return
+          if tgt >= 100:
+              free_charge("target cambiato durante l'attesa")
+              return
+          ok, msg = arm(tgt, soc)
+          log("Auto: " + msg)
+          if not ok:
+              with lock:
+                  S["stop_tries"] = 6
+              set_mode(3)
+
+      def start(target):
+          if S["once"]:
+              target = S["target"]
+          else:
+              target = set_target(target)
+          with lock:
+              S["hold"] = False
+              ps = S["pstate"]
+          if ps == "idle":
+              return False, "Cavo non collegato (Prism libera)"
+          if target >= 100:
+              free_charge("avvio manuale")
+              return True, "Carica libera: nessun limite"
+          with lock:
+              S["acquiring"] = True
+          soc = get_fresh_soc(time.time(), 45)
+          with lock:
+              S["acquiring"] = False
+          if soc is None:
+              log("Avvia manuale: SoC non ricevuto, non avvio")
+              return False, "SoC non ricevuto: non avvio"
+          return arm(target, soc)
+
+      def stop():
+          with lock:
+              S["armed"] = False
+              S["hold"] = False
+              S["free"] = False
+              S["stop_tries"] = 6
+          set_mode(3)
+          log("Stop manuale")
+          return True, "Pausa inviata"
+
+      def disarm():
+          with lock:
+              S["armed"] = False
+              was_hold = S["hold"]
+              S["hold"] = False
+          if was_hold:
+              start_charge()
+          log("Disarmato: la carica continua senza limite")
+          return True, "Disarmato"
+
+      def watcher():
+          last_t = time.time()
+          last_refresh = 0
+          sent = 0
+          miss = 0
+          while True:
+              time.sleep(5)
+              now = time.time()
+              dt = now - last_t
+              last_t = now
+              do_pause = False
+              refresh_topic = None
+              with lock:
+                  if S["stop_tries"] > 0:
+                      if S["pmode"] == "paused":
+                          S["stop_tries"] = 0
+                      else:
+                          S["stop_tries"] -= 1
+                          do_pause = True
+                  if S["hold"] and S["pstate"] == "charging" and S["pmode"] != "paused" \
+                          and now - S["cmd_ts"] > 6:
+                      do_pause = True
+                  if S["once"]:
+                      busy = S["pstate"] == "charging" and not (S["w"] is not None and S["w"] < 100)
+                      if busy:
+                          S["once_seen"] = True
+                          S["once_idle"] = 0
+                      elif S["once_seen"]:
+                          if not S["once_idle"]:
+                              S["once_idle"] = now
+                          elif now - S["once_idle"] > 120:
+                              _end_once_locked("concluso (carica terminata)")
+                  if S["armed"] and S["target"] >= 100:
+                      S["armed"] = False
+                      log("Target 100%: limite rimosso, la macchina termina da sola")
+                  elif S["armed"]:
+                      if last_refresh < S["armed_at"]:
+                          last_refresh = S["armed_at"]
+                          sent = 0
+                          miss = 0
+                      if S["pstate"] == "charging" and S["w"] is not None:
+                          S["e_wh"] += S["w"] * dt / 3600.0
+                      fresh = S["soc_ts"] > S["armed_at"] and now - S["soc_ts"] < STALE_SEC
+                      sync = fresh and S["soc0"] is not None and S["soc"] > S["soc0"] + 0.05
+                      if sync and S["soc_ts"] > S["cal_ts"]:
+                          S["start_soc"] = S["soc"]
+                          S["e_wh"] = 0.0
+                          S["cal_ts"] = S["soc_ts"]
+                          log("Stima riallineata al cloud: %.1f%%" % S["soc"])
+                      est = estimate()
+                      if sync:
+                          cur, src = S["soc"], "cloud"
+                      else:
+                          cur, src = est, "stima"
+                      if cur is not None and est is not None and cur < S["target"] \
+                              and est >= S["target"] + EST_MARGIN:
+                          cur, src = est, "stima di sicurezza"
+                      S["src"] = src
+                      if cur is not None and cur >= S["target"]:
+                          S["armed"] = False
+                          S["stop_tries"] = 6
+                          do_pause = True
+                          log("Target raggiunto (%.1f%%, %s): pausa" % (cur, src))
+                      elif now - S["armed_at"] > MAX_HOURS * 3600:
+                          S["armed"] = False
+                          S["stop_tries"] = 6
+                          do_pause = True
+                          log("Timeout di sicurezza: pausa")
+                      elif S["prefix"] and S["pstate"] == "charging" \
+                              and now - last_refresh > min(REFRESH_SEC * (2 ** miss), 600):
+                          miss = miss + 1 if (sent and S["soc_ts"] <= sent) else 0
+                          refresh_topic = S["prefix"] + "/refresh/mode/set"
+                          sent = now
+                          last_refresh = now
+              if do_pause:
+                  set_mode(3)
+              if refresh_topic:
+                  client.publish(refresh_topic, "force")
+
+      class UConn(http.client.HTTPConnection):
+          def __init__(self):
+              http.client.HTTPConnection.__init__(self, "localhost", timeout=5)
+          def connect(self):
+              s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              s.settimeout(5)
+              s.connect(DOCK)
+              self.sock = s
+
+      def dget(path):
+          c = UConn()
+          try:
+              c.request("GET", path)
+              r = c.getresponse()
+              return r.status, r.read()
+          finally:
+              c.close()
+
+      CONT = {"t": 0, "m": {}}
+
+      def containers():
+          if CONT["m"] and time.time() - CONT["t"] < 60:
+              return CONT["m"]
+          st, body = dget("/containers/json?all=1")
+          lst = json.loads(body)
+          me = os.getenv("HOSTNAME", "x")
+          proj = None
+          for c in lst:
+              if c["Id"].startswith(me):
+                  proj = (c.get("Labels") or {}).get("com.docker.compose.project")
+          m = {}
+          for c in lst:
+              lb = c.get("Labels") or {}
+              if proj and lb.get("com.docker.compose.project") == proj:
+                  m[lb.get("com.docker.compose.service")] = c["Id"]
+          CONT["t"] = time.time()
+          CONT["m"] = m
+          return m
+
+      def demux(b):
+          out = []
+          i = 0
+          while i + 8 <= len(b):
+              n = int.from_bytes(b[i + 4:i + 8], "big")
+              out.append(b[i + 8:i + 8 + n])
+              i += 8 + n
+          if i != len(b):
+              return b.decode(errors="replace")
+          return b"".join(out).decode(errors="replace")
+
+      def lt(line):
+          try:
+              ts, rest = line.split(" ", 1)
+              t = calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
+              return time.strftime("%H:%M:%S ", time.localtime(t)) + rest
+          except Exception:
+              return now_s() + line
+
+      def clog(svc):
+          try:
+              cid = containers().get(svc)
+              if not cid:
+                  return [now_s() + "container " + svc + " non trovato"]
+              st, body = dget("/containers/" + cid + "/logs?stdout=1&stderr=1&timestamps=1&tail=60")
+              if st != 200:
+                  return [now_s() + "log " + svc + " non leggibile: HTTP " + str(st)]
+              txt = ANSI.sub("", demux(body))
+              return [lt(l) for l in txt.splitlines() if l.strip()]
+          except Exception as e:
+              return [now_s() + "log " + svc + " non leggibile: " + str(e)[:80]]
+
+      LC = {"t": 0, "v": []}
+
+      def all_logs():
+          if time.time() - LC["t"] < 2:
+              return LC["v"]
+          items = [("APP", l) for l in list(LOG)] + [("MQTT", l) for l in list(MQ)]
+          for svc, tag in (("saic-gateway", "GW"), ("mosquitto", "BRK")):
+              items += [(tag, l) for l in clog(svc)]
+          items.sort(key=lambda x: x[1][:8])
+          out = [l[:9] + t.ljust(4) + " " + l[9:][:300] for t, l in items][-300:]
+          LC["v"] = out
+          LC["t"] = time.time()
+          return out
+
+      def status():
+          with lock:
+              d = dict(S)
+              d["est"] = estimate()
+              d["age"] = int(time.time() - S["soc_ts"]) if S["soc_ts"] else None
+          return d
+
+      PAGE = r"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+      <meta name=theme-color content="#0b0f14">
+      <meta name=apple-mobile-web-app-capable content=yes>
+      <meta name=mobile-web-app-capable content=yes>
+      <meta name=apple-mobile-web-app-title content="Ricarica IA">
+      <meta name=application-name content="Ricarica IA">
+      <meta name=apple-mobile-web-app-status-bar-style content=black>
+      <link rel=icon type=image/svg+xml href=/favicon.svg>
+      <link rel=apple-touch-icon href=/apple-touch-icon.png>
+      <link rel=manifest href=/manifest.webmanifest>
+      <title>Ricarica IA</title>
+      <style>
+      :root{--card:#141a22;--bd:#232c38;--mu:#8b949e;--gr:#38d66b;--am:#e3b341}
+      *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+      html{min-height:100%;background:#0b0f14 radial-gradient(700px 360px at 50% -6%,#173824,transparent 70%) no-repeat}
+      body{margin:0 auto;max-width:520px;padding:12px 12px calc(64px + env(safe-area-inset-bottom));font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e6edf3;-webkit-text-size-adjust:100%}
+      body.lo{padding-bottom:calc(50vh + 16px);padding-bottom:calc(50dvh + 16px)}
+      button{font-family:inherit;touch-action:manipulation;cursor:pointer}
+      .hd{display:flex;align-items:center;gap:10px;margin:2px 0 10px}
+      .hd img{flex:none;border-radius:9px}
+      .hd h1{font-size:17px;margin:0;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .pill{flex:none;font-size:12px;padding:7px 12px;border-radius:999px;background:#232c38;white-space:nowrap}
+      .pill.g{background:#12351f;color:var(--gr)}
+      .pill.a{background:#3a2e0b;color:var(--am)}
+      .pill.f{background:#0f2a3d;color:#79c0ff}
+      .c{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:14px;margin:10px 0}
+      .big{font-size:clamp(44px,15vw,60px);font-weight:700;line-height:1;letter-spacing:-1px}
+      .bar{position:relative;height:14px;background:#0d1117;border-radius:8px;margin:14px 0 8px}
+      .fill{height:100%;width:0;border-radius:8px;background:linear-gradient(90deg,#1f9d4c,var(--gr));transition:width .6s}
+      .tgt{position:absolute;top:-4px;bottom:-4px;width:3px;background:#fff;border-radius:2px;left:80%}
+      .sub{color:var(--mu);font-size:13px}
+      .chips{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+      .chip{min-width:0;background:#0d1117;border-radius:12px;padding:9px 10px}
+      .chip small{display:block;color:var(--mu);font-size:11px;margin-bottom:2px}
+      .chip b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .stp{display:flex;align-items:center;gap:8px}
+      .stp .sub{flex:none}
+      .stp button{flex:none;width:48px;height:48px;border:0;border-radius:12px;background:#232c38;color:#fff;font-size:24px}
+      .stp input{flex:1;min-width:0;max-width:120px;height:48px;text-align:center;font-size:20px;background:#0d1117;color:#fff;border:1px solid var(--bd);border-radius:12px}
+      .row{display:flex;gap:8px;margin-top:12px}
+      .row button{flex:1;min-height:50px;font-size:15px;font-weight:600;border:0;border-radius:12px;color:#fff}
+      .row button:disabled{opacity:.5}
+      #go{background:#2ea043}#st{background:#da3633}#di{background:#4b5563}
+      #on{background:#1f6feb}
+      #msg{margin-top:8px;min-height:18px}
+      #lp{position:fixed;left:0;right:0;bottom:0;height:50vh;height:50dvh;background:#05080c;border-top:2px solid #30363d;display:flex;flex-direction:column;z-index:9;padding-bottom:env(safe-area-inset-bottom)}
+      #lp.min{height:auto}
+      #lp.min #lb,#lp.min .tab{display:none}
+      #lh{display:flex;gap:6px;align-items:center;padding:6px 8px;background:#141a22;overflow-x:auto;flex:none}
+      #lh button{flex:none;min-height:38px;padding:0 12px;font-size:13px;background:#30363d;border:0;border-radius:9px;color:#fff}
+      #lh button.on{background:#1f6feb}
+      #lh b{flex:none;font-size:14px;padding:8px 6px 8px 2px}
+      #lh .sp{flex:1}
+      #lb{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:6px 8px;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace}
+      #lb div{white-space:pre-wrap;word-break:break-all}
+      .e{color:#ff7b72}.w{color:#e3b341}
+      .t-APP{color:#79c0ff}.t-MQTT{color:#d2a8ff}.t-GW{color:#56d4dd}.t-BRK{color:#8b949e}
+      </style>
+      <div class=hd><img src=/apple-touch-icon.png width=34 height=34 alt=""><h1>Ricarica IA</h1><span id=pill class=pill>…</span></div>
+      <div class=c>
+      <div class=big id=soc>?</div>
+      <div class=bar><div class=fill id=fill></div><div class=tgt id=tgt></div></div>
+      <div class=sub id=sub>…</div>
+      </div>
+      <div class=c><div class=chips>
+      <div class=chip><small>Stato Prism</small><b id=ps>–</b></div>
+      <div class=chip><small>Modo</small><b id=pm>–</b></div>
+      <div class=chip><small>Potenza</small><b id=pw>–</b></div>
+      </div></div>
+      <div class=c>
+      <div class=stp><span class=sub>Target</span><button onclick="adj(-5)">−</button><input id=t type=number inputmode=numeric value=80 min=20 max=100 oninput="editing=1;mark()" onchange="adj(0)"><button onclick="adj(5)">+</button><span class=sub>%</span></div>
+      <div id=tn class=sub style="margin-top:8px"></div>
+      <div class=row><button id=go onclick="act('start')">▶ Avvia</button><button id=st onclick="act('stop')">⏸ Stop</button><button id=di onclick="act('disarm')">Disarma</button></div>
+      <div class=row><button id=on onclick="once()">🔓 100% solo questa volta</button></div>
+      <div id=msg class=sub></div>
+      </div>
+      <div id=lp class=min>
+      <div id=lh><b onclick="tg()">📜 Log</b>
+      <button class="tab on" data-f=ALL onclick="setF('ALL')">Tutti</button>
+      <button class=tab data-f=APP onclick="setF('APP')">APP</button>
+      <button class=tab data-f=MQTT onclick="setF('MQTT')">MQTT</button>
+      <button class=tab data-f=GW onclick="setF('GW')">GW</button>
+      <button class=tab data-f=BRK onclick="setF('BRK')">BRK</button>
+      <span class=sp></span>
+      <button id=cpb onclick="cp()">📋 Copia</button><button id=tgb onclick="tg()">▴</button></div>
+      <div id=lb></div></div>
+      <script>
+      var F='ALL',lines=[],LS=null,editing=0,tt=null,n=0;
+      var SN={idle:'Libera',waiting:'In attesa',charging:'In carica',pause:'In pausa'};
+      var MN={normal:'Normale',paused:'Pausa',solar:'Solare',hybrid:'Ibrido',suspended:'Sospeso',autolimit:'Autolimit'};
+      function E(i){return document.getElementById(i)}
+      function isMin(){return E('lp').className=='min'}
+      function mark(){var v=+E('t').value;var o=LS&&LS.once;var m=o?100:v;
+      E('tgt').style.left=m>=100?'calc(100% - 3px)':Math.max(0,m)+'%';
+      E('tn').textContent=o?('🔓 100% solo questa volta, poi torna a '+LS.base+'%'):(v>=100?'🔓 100% = nessun limite: la macchina termina da sola':'Si ferma a '+v+'%')}
+      function pushT(){clearTimeout(tt);tt=setTimeout(function(){fetch('/api/target',{method:'POST',body:JSON.stringify({target:+E('t').value})}).then(function(){editing=0})},400)}
+      function adj(d){var v=(+E('t').value||80)+d;E('t').value=Math.max(20,Math.min(100,v));editing=1;mark();pushT()}
+      function act(a){var all=document.querySelectorAll('.row button');for(var i=0;i<all.length;i++)all[i].disabled=true;
+      E('msg').textContent=(a=='start'&&+E('t').value<100&&!(LS&&LS.once))?'⏳ Attendo il SoC (max 45 s)...':'...';
+      fetch('/api/'+a,{method:'POST',body:JSON.stringify({target:+E('t').value})})
+      .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;editing=0})
+      .catch(function(){E('msg').textContent='Errore di rete'})
+      .then(function(){for(var i=0;i<all.length;i++)all[i].disabled=false;load();loadLogs()})}
+      function once(){var on=!(LS&&LS.once);E('msg').textContent='...';
+      fetch('/api/once',{method:'POST',body:JSON.stringify({on:on})})
+      .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;editing=0})
+      .catch(function(){E('msg').textContent='Errore di rete'})
+      .then(function(){load();loadLogs()})}
+      function fw(w){return w==null?'–':(w>=1000?(w/1000).toFixed(2)+' kW':Math.round(w)+' W')}
+      function load(){fetch('/api/status').then(function(r){return r.json()}).then(function(s){LS=s;
+      if(!editing)E('t').value=s.once?s.base:s.target;
+      var v=s.soc!=null?s.soc:s.est;
+      if(s.armed&&s.est!=null&&s.src&&s.src!='cloud')v=s.est;
+      E('soc').textContent=s.soc==null?'?':Math.round(s.soc)+'%';
+      E('fill').style.width=(v==null?0:Math.max(0,Math.min(100,v)))+'%';
+      E('sub').textContent='Cloud: '+(s.age==null?'nessun dato':s.age+' s fa')+'  ·  Stima: '+(s.est==null?'–':s.est.toFixed(1)+'%')+'  ·  Fonte: '+(s.src||'–');
+      var p=E('pill');
+      if(s.acquiring){p.className='pill a';p.textContent='⏳ Attendo il SoC'}
+      else if(s.armed){p.className='pill g';p.textContent='🟢 Armato → '+s.target+'%'}
+      else if(s.target>=100){p.className='pill f';p.textContent=s.once?'🔓 100% una tantum':'🔓 Senza limite'}
+      else{p.className='pill';p.textContent='⚪ Non armato'}
+      E('ps').textContent=s.pstate==null?'–':(SN[s.pstate]||s.pstate);
+      E('pm').textContent=s.pmode==null?'–':(MN[s.pmode]||s.pmode);
+      E('pw').textContent=fw(s.w);
+      E('on').textContent=s.once?'↩ Annulla 100%':'🔓 100% solo questa volta';
+      document.title=(s.soc==null?'':Math.round(s.soc)+'% · ')+'Ricarica IA';mark()})
+      .catch(function(){var p=E('pill');p.className='pill';p.textContent='⚠️ Offline'})}
+      function sumTxt(){var s=LS;if(!s)return 'stato n/d';
+      return 'SoC cloud '+(s.soc==null?'?':s.soc.toFixed(0)+'%')+' ('+(s.age==null?'-':s.age+'s fa')+') | stima '+(s.est==null?'-':s.est.toFixed(1)+'%')+' | fonte '+(s.src||'-')+' | Prism '+s.pstate+'/'+s.pmode+'/'+(s.w==null?'-':s.w)+'W | armato '+s.armed+' target '+s.target+'% (base '+s.base+'%, una tantum '+s.once+') | attesa SoC '+s.acquiring}
+      function vis(){var o=[];for(var i=0;i<lines.length;i++){var l=lines[i];var tag=l.substr(9,4).trim();if(F=='ALL'||tag==F)o.push(l)}return o}
+      function render(){var box=E('lb');var nb=box.scrollTop+box.clientHeight>=box.scrollHeight-30;box.textContent='';
+      var v=vis();for(var i=0;i<v.length;i++){var l=v[i];var tag=l.substr(9,4).trim();var d=document.createElement('div');var c='';
+      if(tag!='MQTT'&&/error|errore|fail|exception|revoked|traceback|non ricevuto|non leggibile|non trovato/i.test(l))c='e';else if(tag!='MQTT'&&/warn|timeout/i.test(l))c='w';
+      d.className=c;var sp=document.createElement('span');sp.className='t-'+tag;sp.textContent=l.substr(0,13);d.appendChild(sp);d.appendChild(document.createTextNode(l.substr(13)));box.appendChild(d)}
+      if(nb)box.scrollTop=box.scrollHeight}
+      function setF(f){F=f;var b=document.querySelectorAll('#lh .tab');for(var i=0;i<b.length;i++){b[i].className='tab'+(b[i].getAttribute('data-f')==f?' on':'')}render()}
+      function loadLogs(){fetch('/api/logs').then(function(r){return r.json()}).then(function(j){lines=j;if(!isMin())render()}).catch(function(){})}
+      function tg(){var p=E('lp'),m=isMin();p.className=m?'':'min';document.body.className=m?'lo':'';E('tgb').textContent=m?'▾':'▴';if(m){render();loadLogs()}}
+      function cp(){var t='LOG stack - '+new Date().toLocaleString()+' - filtro '+F+'\n'+sumTxt()+'\n---\n'+vis().join('\n');
+      var a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;top:0;left:0;opacity:0;font-size:16px';document.body.appendChild(a);a.focus();a.select();
+      try{a.setSelectionRange(0,t.length)}catch(e){}
+      var ok=false;try{ok=document.execCommand('copy')}catch(e){}document.body.removeChild(a);
+      var b=E('cpb');b.textContent=ok?'✅ Copiato':'❌ Errore';setTimeout(function(){b.textContent='📋 Copia'},1500)}
+      setInterval(function(){load();n++;if(!isMin()||n%2==0)loadLogs()},3000);load();loadLogs();mark();
+      </script>"""
+
+      class H(BaseHTTPRequestHandler):
+          def log_message(self, *a):
+              pass
+          def _send(self, code, body, ctype="application/json"):
+              b = body if isinstance(body, bytes) else body.encode()
+              self.send_response(code)
+              self.send_header("Content-Type", ctype)
+              self.send_header("Content-Length", str(len(b)))
+              self.end_headers()
+              self.wfile.write(b)
+          def do_GET(self):
+              p = self.path.split("?")[0]
+              if p == "/api/status":
+                  self._send(200, json.dumps(status()))
+              elif p == "/api/logs":
+                  self._send(200, json.dumps(all_logs()))
+              elif p == "/favicon.svg":
+                  self._send(200, FAV, "image/svg+xml")
+              elif p == "/favicon.ico" or p.startswith("/apple-touch-icon"):
+                  self._send(200, icon_png(), "image/png")
+              elif p == "/manifest.webmanifest":
+                  self._send(200, MANIFEST, "application/manifest+json")
+              else:
+                  self._send(200, PAGE, "text/html; charset=utf-8")
+          def do_POST(self):
+              n = int(self.headers.get("Content-Length") or 0)
+              try:
+                  data = json.loads(self.rfile.read(n) or b"{}")
+              except ValueError:
+                  data = {}
+              try:
+                  if self.path == "/api/start":
+                      ok, msg = start(int(data.get("target", DEF_TARGET)))
+                  elif self.path == "/api/stop":
+                      ok, msg = stop()
+                  elif self.path == "/api/disarm":
+                      ok, msg = disarm()
+                  elif self.path == "/api/target":
+                      t = set_target(int(data.get("target", DEF_TARGET)))
+                      ok, msg = True, "Target " + str(t) + "%"
+                  elif self.path == "/api/once":
+                      ok, msg = once100(bool(data.get("on")))
+                  else:
+                      ok, msg = False, "?"
+              except (ValueError, TypeError):
+                  ok, msg = False, "Valore non valido"
+              self._send(200 if ok else 409, json.dumps({"ok": ok, "msg": msg}))
+
+      threading.Thread(target=icon_png, daemon=True).start()
+      client.connect_async(BROKER, 1883, 60)
+      client.loop_start()
+      threading.Thread(target=watcher, daemon=True).start()
+      ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
