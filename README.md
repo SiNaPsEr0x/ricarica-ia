@@ -1,5 +1,7 @@
 <div align="center">
 
+**🇮🇹 Italiano** &nbsp;|&nbsp; [**🇬🇧 English**](README.en.md)
+
 <img src="docs/img/hero.webp" alt="Ricarica IA: la ricarica che si ferma da sola" width="100%">
 
 # ⚡ Ricarica IA
