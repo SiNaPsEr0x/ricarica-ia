@@ -21,7 +21,7 @@ No alarms, no checking, no surprises.
 
 </div>
 
-> 🌍 **Note on languages:** the documentation is available in English and Italian. The web interface, the screenshots and the presentation page are currently **in Italian only**; the English names of the buttons are given in parentheses throughout this guide.
+> ⚠️ **The software itself is currently available in Italian only.** The documentation is bilingual (English/Italian), but the web interface (buttons, labels, messages), the screenshots and the presentation page are **only in Italian** for now. The English names of the buttons are given in parentheses throughout this guide.
 
 ---
 

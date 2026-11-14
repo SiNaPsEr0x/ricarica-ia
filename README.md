@@ -21,6 +21,8 @@ Niente sveglie, niente controlli, niente sorprese.
 
 </div>
 
+> ⚠️ **Al momento il software è disponibile solo in italiano.** La documentazione è bilingue (italiano/inglese), ma l'interfaccia web (pulsanti, etichette, messaggi), gli screenshot e la pagina di presentazione sono **solo in italiano**.
+
 ---
 
 ## 🔌 Fatto con
