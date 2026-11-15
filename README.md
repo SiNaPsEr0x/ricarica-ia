@@ -71,24 +71,33 @@ Ricarica IA prende il comando della Prism **anche se sta già erogando corrente*
   </tr>
 </table>
 
-## 🚀 Installazione
+## 🚀 Installazione con Portainer
 
-```bash
-git clone https://github.com/SiNaPsEr0x/ricarica-ia.git
-cd ricarica-ia
-cp .env.example .env      # inserisci SAIC_USER e SAIC_PASSWORD (account MG secondario)
-docker compose up -d
-```
+1. **Stacks → Add stack** e dai un nome (es. `ricarica-ia`).
+2. Scegli **Web editor** e incolla il contenuto di [`docker-compose.yml`](docker-compose.yml).
+3. Sotto l'editor espandi **Environment variables** e aggiungi due variabili (una per una, oppure con **Load variables from .env file** partendo da [`.env.example`](.env.example)):
+   - `SAIC_USER` = email dell'account MG iSMART **secondario**
+   - `SAIC_PASSWORD` = la sua password
+4. Premi **Deploy the stack**.
+5. Apri `http://IP_DEL_RASPBERRY:8088` dal telefono.
 
-Con Portainer: **Stacks → Add stack**, incolla [`docker-compose.yml`](docker-compose.yml) e aggiungi `SAIC_USER` e `SAIC_PASSWORD` come variabili d'ambiente dello stack.
+Il compose legge le credenziali con `${SAIC_USER}` e `${SAIC_PASSWORD}`: lasciale così nel YAML.
 
-> 🔐 **Non scrivere mai email e password dentro `docker-compose.yml`** e non committare il file `.env`: se pubblichi un tuo fork, controlla con `git diff` prima del push.
+> 🔐 **Non scrivere mai email e password dentro `docker-compose.yml`** e non committare il file `.env`. Se la password contiene `$` nel YAML andrebbe scritto `$$`: con le variabili di Portainer controlla il log (vedi sotto).
 
-Poi apri `http://IP_DEL_RASPBERRY:8088` dal telefono.
+**Verifica:** nel log del container `saic-gateway` deve comparire `Logged in as …`.
+
+### ✏️ Modificare o aggiornare lo stack
+
+**Stacks → il tuo stack → Editor**: lì cambi il compose (per esempio `TARGET_SOC` o `EST_MARGIN`) ed espandi **Environment variables** per le credenziali. Poi **Update the stack**; se hai tolto dei servizi spunta anche **Prune services**. Lo stato del limiter (sessione, target) è nel volume `pydeps`.
+
+*Alternativa Git:* **Add stack → Git Repository** con Compose path `docker-compose.yml` e le stesse variabili. Gli stack da Git non hanno la scheda Editor: per cambiare le impostazioni serve un tuo fork del repo.
+
+*Senza Portainer* (terminale): `git clone`, `cp .env.example .env` (compila le due variabili), poi `docker compose up -d`.
 
 ## 🔧 Impostazioni principali
 
-Nel servizio `ev-limiter` di [`docker-compose.yml`](docker-compose.yml):
+Nel servizio `ev-limiter` dello stack (scheda **Editor** di Portainer, oppure [`docker-compose.yml`](docker-compose.yml)):
 
 | Variabile | Predefinito | Cosa fa |
 |---|---|---|

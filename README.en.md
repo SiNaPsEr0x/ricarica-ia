@@ -71,24 +71,33 @@ Ricarica IA takes command of the Prism **even when it is already delivering powe
   </tr>
 </table>
 
-## 🚀 Installation
+## 🚀 Installation with Portainer
 
-```bash
-git clone https://github.com/SiNaPsEr0x/ricarica-ia.git
-cd ricarica-ia
-cp .env.example .env      # set SAIC_USER and SAIC_PASSWORD (secondary MG account)
-docker compose up -d
-```
+1. **Stacks → Add stack** and give it a name (e.g. `ricarica-ia`).
+2. Choose **Web editor** and paste the contents of [`docker-compose.yml`](docker-compose.yml).
+3. Below the editor expand **Environment variables** and add two variables (one by one, or with **Load variables from .env file** starting from [`.env.example`](.env.example)):
+   - `SAIC_USER` = email of the **secondary** MG iSMART account
+   - `SAIC_PASSWORD` = its password
+4. Click **Deploy the stack**.
+5. Open `http://RASPBERRY_IP:8088` from your phone.
 
-With Portainer: **Stacks → Add stack**, paste [`docker-compose.yml`](docker-compose.yml) and add `SAIC_USER` and `SAIC_PASSWORD` as stack environment variables.
+The compose reads the credentials with `${SAIC_USER}` and `${SAIC_PASSWORD}`: leave them like that in the YAML.
 
-> 🔐 **Never write your email and password inside `docker-compose.yml`** and never commit your `.env` file: if you publish a fork, check `git diff` before pushing.
+> 🔐 **Never write your email and password inside `docker-compose.yml`** and never commit your `.env` file. If the password contains `$`, it would have to be written `$$` in the YAML: with Portainer variables, check the log (see below).
 
-Then open `http://RASPBERRY_IP:8088` from your phone.
+**Check:** the `saic-gateway` container log must show `Logged in as …`.
+
+### ✏️ Editing or updating the stack
+
+**Stacks → your stack → Editor**: change the compose there (for example `TARGET_SOC` or `EST_MARGIN`) and expand **Environment variables** for the credentials. Then **Update the stack**; if you removed services, also tick **Prune services**. The limiter's state (session, target) lives in the `pydeps` volume.
+
+*Git alternative:* **Add stack → Git Repository** with Compose path `docker-compose.yml` and the same variables. Git stacks have no Editor tab: to change settings you need your own fork of the repo.
+
+*Without Portainer* (terminal): `git clone`, `cp .env.example .env` (fill in the two variables), then `docker compose up -d`.
 
 ## 🔧 Main settings
 
-In the `ev-limiter` service of [`docker-compose.yml`](docker-compose.yml):
+In the `ev-limiter` service of the stack (Portainer **Editor** tab, or [`docker-compose.yml`](docker-compose.yml)):
 
 | Variable | Default | What it does |
 |---|---|---|
