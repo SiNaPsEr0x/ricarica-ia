@@ -8,6 +8,10 @@
 #    - PRISM_TOPIC / PRISM_PORT   -> devono combaciare con le impostazioni MQTT della Prism
 #    - BATTERY_KWH / TARGET_SOC   -> capacita' della tua batteria e limite desiderato
 #
+#  PRESA DI CONTROLLO: se la Prism sta caricando senza limite (es. dopo un blackout) il
+#  limiter la ferma, legge il SoC e si riarma da solo (TAKEOVER=true). Stop e Disarma
+#  manuali vengono ricordati anche dopo un riavvio.
+#
 #  RETE: porte 8088 (pagina web) e 1883 (MQTT) senza password -> solo LAN / Tailscale,
 #  mai esposte su Internet.
 # =============================================================================
@@ -75,6 +79,8 @@ services:
       CHARGE_EFFICIENCY: "0.92"
       EST_MARGIN: "1.0"
       SOC_STALE_SEC: "600"
+      TAKEOVER: "true"
+      TAKEOVER_COOLDOWN_SEC: "120"
       GW_OFF: "true"
       TZ: Europe/Rome
     volumes:
@@ -102,6 +108,7 @@ configs:
       allow_anonymous true
       persistence true
       persistence_location /mosquitto/data/
+      autosave_interval 30
       log_dest stdout
       log_type error
       log_type warning
@@ -127,6 +134,8 @@ configs:
       REFRESH_FAR_SEC = int(os.getenv("REFRESH_FAR_SEC", "600"))
       STALE_SEC = int(os.getenv("SOC_STALE_SEC", "600"))
       EST_MARGIN = float(os.getenv("EST_MARGIN", "1.0"))
+      TAKEOVER = os.getenv("TAKEOVER", "true").lower() == "true"
+      TAKEOVER_COOLDOWN = int(os.getenv("TAKEOVER_COOLDOWN_SEC", "120"))
       MAX_HOURS = 12
       DOCK = "/var/run/docker.sock"
       ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -225,15 +234,45 @@ configs:
               pass
           return DEF_TARGET
 
+      SFILE = "/deps/state.json"
+
+      def load_state():
+          try:
+              with open(SFILE) as f:
+                  d = json.load(f)
+              ses = d.get("ses")
+              if ses not in ("armed", "done", "stopped", "free"):
+                  ses = None
+              return ses, bool(d.get("once"))
+          except Exception:
+              return None, False
+
+      _ses0, _once0 = load_state()
+
       lock = threading.Lock()
       WAKE = threading.Event()
       LOG = deque(maxlen=120)
       MQ = deque(maxlen=150)
       S = dict(soc=None, soc_ts=0, prefix=None, pstate=None, pmode=None,
-               w=None, w_ts=0, armed=False, acquiring=False, target=load_target(),
+               w=None, w_ts=0, armed=False, acquiring=False, target=100 if _once0 else load_target(),
                start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
                stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
-               base=load_target(), once=False, once_seen=False, once_idle=0, cur=None, off_boot=False)
+               base=load_target(), once=_once0, once_seen=False, once_idle=0, cur=None, off_boot=False,
+               ses=_ses0, take_ts=0)
+
+      def _save_locked():
+          try:
+              tmp = SFILE + ".tmp"
+              with open(tmp, "w") as f:
+                  json.dump({"ses": S["ses"], "once": S["once"]}, f)
+              os.replace(tmp, SFILE)
+          except Exception:
+              pass
+
+      def _ses_locked(v):
+          if S["ses"] != v:
+              S["ses"] = v
+              _save_locked()
 
       def now_s():
           return time.strftime("%H:%M:%S ")
@@ -256,6 +295,7 @@ configs:
               S["target"] = S["base"]
               S["once_seen"] = False
               S["once_idle"] = 0
+              _save_locked()
               log("100% una tantum " + why + ": target di nuovo " + str(S["target"]) + "%")
 
       client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -303,17 +343,29 @@ configs:
                   if S["pstate"] == "idle":
                       S["hold"] = False
                       S["free"] = False
-                      if prev not in (None, "idle"):
+                      if prev != "idle":
                           _end_once_locked("concluso (cavo scollegato)")
                       if S["armed"]:
                           S["armed"] = False
                           log("Cavo scollegato: disarmato")
-                  plugged = S["pstate"] == "waiting" or \
-                      (prev == "idle" and S["pstate"] not in (None, "idle"))
-                  if AUTO_ARM and plugged and not S["acquiring"] and not S["armed"] \
+                      if not msg.retain:
+                          _ses_locked(None)
+                  why = None
+                  if S["pstate"] == "waiting" or \
+                          (prev == "idle" and S["pstate"] not in (None, "idle")):
+                      why = "Cavo collegato"
+                  elif TAKEOVER and now - S["take_ts"] > TAKEOVER_COOLDOWN and (
+                          (S["ses"] is None and S["pstate"] == "charging") or
+                          (S["ses"] == "armed" and S["pstate"] in ("waiting", "charging", "pause")) or
+                          (S["ses"] == "done" and S["pstate"] == "charging")):
+                      why = "Presa di controllo"
+                  if AUTO_ARM and why and S["ses"] not in ("stopped", "free") \
+                          and not S["acquiring"] and not S["armed"] \
                           and not S["free"] and now - S["cmd_ts"] > 20:
+                      if why != "Cavo collegato":
+                          S["take_ts"] = now
                       S["acquiring"] = True
-                      spawn = (now,)
+                      spawn = (now, why)
               elif t == T("mode"):
                   S["pmode"] = idx(MODES, p)
                   MQ.append(now_s() + "prism/mode = " + str(S["pmode"]) + " (" + p + ")")
@@ -387,11 +439,14 @@ configs:
           if not 20 <= target <= 100:
               return False, "Target non valido"
           if soc >= target:
+              with lock:
+                  _ses_locked("done")
               return False, "SoC gia a %.0f%%: resto in pausa" % soc
           with lock:
               S.update(armed=True, target=target, start_soc=soc, soc0=soc, e_wh=0.0,
                        armed_at=time.time(), cal_ts=time.time(), stop_tries=0,
                        hold=False, free=False, src="", cur=soc)
+              _ses_locked("armed")
           start_charge()
           log("Avvio da %.0f%% verso %d%%" % (soc, target))
           return True, "Avviata da %.0f%%" % soc
@@ -403,6 +458,7 @@ configs:
               if persist:
                   S["base"] = t
                   S["once"] = False
+                  _save_locked()
           if persist:
               try:
                   with open(TFILE, "w") as f:
@@ -416,6 +472,7 @@ configs:
               S["armed"] = False
               S["hold"] = False
               S["free"] = True
+              _ses_locked("free")
           log("Nessun limite (100%): carica libera, finisce la macchina - " + why)
           start_charge()
 
@@ -430,6 +487,7 @@ configs:
               S["target"] = 100
               S["once_seen"] = False
               S["once_idle"] = 0
+              _save_locked()
               ps = S["pstate"]
               base = S["base"]
           log("100% una tantum attivato: dopo la carica il target torna a " + str(base) + "%")
@@ -437,7 +495,7 @@ configs:
               free_charge("100% una tantum")
           return True, "100% solo questa volta"
 
-      def auto_arm(plug_ts):
+      def auto_arm(plug_ts, why="Cavo collegato"):
           with lock:
               tgt = S["target"]
           if tgt >= 100:
@@ -445,7 +503,7 @@ configs:
                   S["acquiring"] = False
               free_charge("cavo collegato")
               return
-          log("Cavo collegato: pausa e richiedo il SoC")
+          log(why + ": pausa e richiedo il SoC")
           with lock:
               S["hold"] = True
           set_mode(3)
@@ -502,6 +560,7 @@ configs:
               S["hold"] = False
               S["free"] = False
               S["stop_tries"] = 6
+              _ses_locked("stopped")
           set_mode(3)
           log("Stop manuale")
           return True, "Pausa inviata"
@@ -511,6 +570,7 @@ configs:
               S["armed"] = False
               was_hold = S["hold"]
               S["hold"] = False
+              _ses_locked("free")
           if was_hold:
               start_charge()
           log("Disarmato: la carica continua senza limite")
@@ -558,6 +618,7 @@ configs:
                               _end_once_locked("concluso (carica terminata)")
                   if S["armed"] and S["target"] >= 100:
                       S["armed"] = False
+                      _ses_locked("free")
                       log("Target 100%: limite rimosso, la macchina termina da sola")
                   elif S["armed"]:
                       if last_refresh < S["armed_at"]:
@@ -587,11 +648,13 @@ configs:
                           S["armed"] = False
                           S["stop_tries"] = 6
                           do_pause = True
+                          _ses_locked("done")
                           log("Target raggiunto (%.1f%%, %s): pausa" % (cur, src))
                       elif now - S["armed_at"] > MAX_HOURS * 3600:
                           S["armed"] = False
                           S["stop_tries"] = 6
                           do_pause = True
+                          _ses_locked("done")
                           log("Timeout di sicurezza: pausa")
                       elif S["prefix"] and S["pstate"] == "charging" \
                               and now - last_refresh > min((REFRESH_FAR_SEC if cur is not None and S["target"] - cur > 3 else REFRESH_SEC) * (2 ** miss), 600):

@@ -48,6 +48,19 @@ Only the battery reading goes through the cloud, and only while the cable is plu
 - Cloud refreshes: every 2 min within 3 points of the target, every 10 min when further away; if the cloud doesn't answer the interval doubles (max 10 min).
 - The remaining charging time reported by the car (computed for 100%) is **not** used.
 
+### 🔁 Takeover (even after a power outage)
+
+Ricarica IA takes command of the Prism **even when it is already delivering power**:
+
+- If the Prism is charging and the limit is not armed (stack restart, blackout, charge started from the Silla app), it **pauses**, reads the level from the cloud and **re-arms** towards the target. If the level is already at the target, it stays paused.
+- The session (armed / at target / stop / free) and "100% just this once" are **saved to a file** (`/deps/state.json`, `pydeps` volume) and survive restarts.
+- Manual **Stop** and **Disarma** (Disarm) are respected after a restart too: while the cable stays plugged in it won't take control again. Unplugging the cable starts fresh.
+- If the Prism itself reboots and detects the cable again, the session is treated as new and the limit is applied.
+- Anti-loop: at least `TAKEOVER_COOLDOWN_SEC` seconds (120) between two takeovers.
+- Mosquitto saves its data every 30 seconds (`autosave_interval`, default is 30 minutes): after a blackout the restored data is recent.
+- If the cloud doesn't answer, charging stays paused until the level arrives: press **Disarma** (Disarm) to force it.
+- To get the previous behaviour back (arm only when the cable is plugged in): `TAKEOVER=false`.
+
 <table>
   <tr>
     <td align="center"><img src="docs/img/1-attesa.webp" width="150"></td>
@@ -91,6 +104,8 @@ In the `ev-limiter` service of [`docker-compose.yml`](docker-compose.yml):
 | `EST_MARGIN` | `1.0` | Percentage points above the target after which the estimate stops charging anyway |
 | `SOC_STALE_SEC` | `600` | Older than this, the cloud reading is no longer considered fresh |
 | `GW_OFF` | `true` | Turns off the gateway's periodic polling: only Ricarica IA makes requests |
+| `TAKEOVER` | `true` | Takes command of the Prism even when it is already charging without a limit (needs `AUTO_ARM`) |
+| `TAKEOVER_COOLDOWN_SEC` | `120` | Minimum seconds between two takeovers |
 
 In the `saic-gateway` service:
 

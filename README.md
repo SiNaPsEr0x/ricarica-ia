@@ -48,6 +48,19 @@ Solo la lettura della batteria passa dal cloud, e solo a cavo inserito. I comand
 - Aggiornamenti dal cloud: ogni 2 min a meno di 3 punti dal target, ogni 10 min più lontano; se il cloud non risponde l'intervallo raddoppia (max 10 min).
 - Il tempo residuo mostrato dall'auto (riferito al 100%) **non** viene usato.
 
+### 🔁 Presa di controllo (anche dopo un blackout)
+
+Ricarica IA prende il comando della Prism **anche se sta già erogando corrente**:
+
+- Se la Prism sta caricando e il limite non è armato (riavvio dello stack, blackout, carica avviata dall'app Silla), mette in **pausa**, legge il livello dal cloud e **si riarma** verso il target. Se il livello è già a target, resta in pausa.
+- La sessione (armata / a target / stop / libera) e il "100% solo questa volta" sono **salvati su file** (`/deps/state.json`, volume `pydeps`) e sopravvivono al riavvio.
+- **Stop** e **Disarma** manuali vengono rispettati anche dopo un riavvio: finché il cavo resta collegato non riprende il controllo. Scollegando il cavo si riparte da zero.
+- Se la Prism stessa si riavvia e rileva di nuovo il cavo, la sessione è trattata come nuova e il limite viene applicato.
+- Anti-loop: tra due prese di controllo passano almeno `TAKEOVER_COOLDOWN_SEC` secondi (120).
+- Mosquitto salva i messaggi ogni 30 secondi (`autosave_interval`, il predefinito è 30 minuti): dopo un blackout i dati ripristinati sono recenti.
+- Se il cloud non risponde, la carica resta in pausa finché non arriva il livello: premi **Disarma** per forzarla.
+- Per tornare al comportamento precedente (arma solo al collegamento del cavo): `TAKEOVER=false`.
+
 <table>
   <tr>
     <td align="center"><img src="docs/img/1-attesa.webp" width="150"></td>
@@ -91,6 +104,8 @@ Nel servizio `ev-limiter` di [`docker-compose.yml`](docker-compose.yml):
 | `EST_MARGIN` | `1.0` | Punti % oltre il target dopo cui la stima ferma comunque la carica |
 | `SOC_STALE_SEC` | `600` | Oltre questa età il dato del cloud non è più considerato fresco |
 | `GW_OFF` | `true` | Spegne il polling periodico del gateway: le richieste le fa solo Ricarica IA |
+| `TAKEOVER` | `true` | Prende il comando della Prism anche se sta già caricando senza limite (richiede `AUTO_ARM`) |
+| `TAKEOVER_COOLDOWN_SEC` | `120` | Secondi minimi tra due prese di controllo |
 
 Nel servizio `saic-gateway`:
 
