@@ -3,9 +3,13 @@
 #  Stack Docker Compose (testato su Portainer / Raspberry Pi)
 #
 #  DA IMPOSTARE (vedi README):
-#    - SAIC_USER / SAIC_PASSWORD  -> variabili d'ambiente dello stack (account MG iSMART)
+#    - SAIC_USER / SAIC_PASSWORD  -> file .env o variabili dello stack (account MG iSMART
+#                                    SECONDARIO). Non scriverli mai in questo file.
 #    - PRISM_TOPIC / PRISM_PORT   -> devono combaciare con le impostazioni MQTT della Prism
 #    - BATTERY_KWH / TARGET_SOC   -> capacita' della tua batteria e limite desiderato
+#
+#  RETE: porte 8088 (pagina web) e 1883 (MQTT) senza password -> solo LAN / Tailscale,
+#  mai esposte su Internet.
 # =============================================================================
 x-logging: &logging
   driver: json-file
@@ -42,6 +46,7 @@ services:
       SAIC_PASSWORD: "${SAIC_PASSWORD}"
       MQTT_URI: "tcp://mosquitto:1883"
       HA_DISCOVERY_ENABLED: "False"
+      MESSAGES_REQUEST_INTERVAL: "900"
       TZ: Europe/Rome
 
   ev-limiter:
@@ -65,6 +70,11 @@ services:
       TARGET_SOC: "80"
       AUTO_ARM: "true"
       ACQUIRE_SEC: "300"
+      REFRESH_SEC: "120"
+      REFRESH_FAR_SEC: "600"
+      CHARGE_EFFICIENCY: "0.92"
+      EST_MARGIN: "1.0"
+      SOC_STALE_SEC: "600"
       GW_OFF: "true"
       TZ: Europe/Rome
     volumes:
@@ -114,6 +124,7 @@ configs:
       GW_OFF = os.getenv("GW_OFF", "true").lower() == "true"
       ACQUIRE_SEC = int(os.getenv("ACQUIRE_SEC", "300"))
       REFRESH_SEC = int(os.getenv("REFRESH_SEC", "120"))
+      REFRESH_FAR_SEC = int(os.getenv("REFRESH_FAR_SEC", "600"))
       STALE_SEC = int(os.getenv("SOC_STALE_SEC", "600"))
       EST_MARGIN = float(os.getenv("EST_MARGIN", "1.0"))
       MAX_HOURS = 12
@@ -215,13 +226,14 @@ configs:
           return DEF_TARGET
 
       lock = threading.Lock()
+      WAKE = threading.Event()
       LOG = deque(maxlen=120)
       MQ = deque(maxlen=150)
       S = dict(soc=None, soc_ts=0, prefix=None, pstate=None, pmode=None,
                w=None, w_ts=0, armed=False, acquiring=False, target=load_target(),
                start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
                stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
-               base=load_target(), once=False, once_seen=False, once_idle=0)
+               base=load_target(), once=False, once_seen=False, once_idle=0, cur=None, off_boot=False)
 
       def now_s():
           return time.strftime("%H:%M:%S ")
@@ -265,6 +277,10 @@ configs:
               now = time.time()
               if t.startswith("saic/") and "/drivetrain/" in t:
                   S["prefix"] = t.split("/drivetrain/")[0]
+                  if GW_OFF and not S["off_boot"]:
+                      S["off_boot"] = True
+                      S["off_ts"] = now
+                      off_topic = S["prefix"] + "/refresh/mode/set"
                   if t.endswith("/drivetrain/soc") and not msg.retain:
                       try:
                           S["soc"] = float(p)
@@ -275,10 +291,15 @@ configs:
                   if GW_OFF and p == "periodic" and now - S["off_ts"] > 10:
                       S["off_ts"] = now
                       off_topic = t + "/set"
+              elif t.startswith("saic/") and t.endswith("/refresh/pollingPhase"):
+                  if GW_OFF and p in ("active", "after_shutdown") and now - S["off_ts"] > 10:
+                      S["off_ts"] = now
+                      off_topic = t.rsplit("/", 1)[0] + "/mode/set"
               elif t == T("state"):
                   prev = S["pstate"]
                   S["pstate"] = idx(STATES, p)
                   MQ.append(now_s() + "prism/state = " + str(S["pstate"]) + " (" + p + ")")
+                  WAKE.set()
                   if S["pstate"] == "idle":
                       S["hold"] = False
                       S["free"] = False
@@ -303,8 +324,8 @@ configs:
                   except ValueError:
                       pass
           if off_topic:
-              client.publish(off_topic, "off")
-              log("Gateway: polling periodico spento (refresh off)")
+              client.publish(off_topic, "off", retain=True)
+              log("Gateway: polling spento (refresh off, memorizzato nel broker)")
           if spawn:
               threading.Thread(target=auto_arm, args=spawn, daemon=True).start()
 
@@ -315,6 +336,7 @@ configs:
           S["cmd_ts"] = time.time()
           MQ.append(now_s() + "TX prism set_mode " + str(n))
           client.publish(T("command/set_mode"), str(n), qos=1)
+          WAKE.set()
 
       def start_charge():
           if S["pstate"] == "charging":
@@ -329,6 +351,18 @@ configs:
               return None
           return S["start_soc"] + S["e_wh"] / 1000.0 * EFF / CAP * 100.0
 
+      def eta_sec():
+          if not S["armed"] or S["pstate"] != "charging" or S["target"] >= 100:
+              return None
+          w, cur = S["w"], S["cur"]
+          if w is None or w < 100 or cur is None:
+              return None
+          rem_wh = (S["target"] - cur) / 100.0 * CAP * 1000.0 / EFF
+          if rem_wh <= 0:
+              return 0
+          return int(rem_wh / w * 3600)
+
+
       def get_fresh_soc(since, max_wait, gap=30, gap_max=None, need_hold=False):
           end = time.time() + max_wait
           next_force = 0
@@ -339,7 +373,7 @@ configs:
                   hold = S["hold"]
               if soc is not None and ts > since:
                   return soc
-              if ps == "idle" or (need_hold and not hold):
+              if ps in (None, "idle") or (need_hold and not hold):
                   return None
               if prefix and time.time() >= next_force:
                   client.publish(prefix + "/refresh/mode/set", "force")
@@ -357,7 +391,7 @@ configs:
           with lock:
               S.update(armed=True, target=target, start_soc=soc, soc0=soc, e_wh=0.0,
                        armed_at=time.time(), cal_ts=time.time(), stop_tries=0,
-                       hold=False, free=False, src="")
+                       hold=False, free=False, src="", cur=soc)
           start_charge()
           log("Avvio da %.0f%% verso %d%%" % (soc, target))
           return True, "Avviata da %.0f%%" % soc
@@ -447,7 +481,7 @@ configs:
           with lock:
               S["hold"] = False
               ps = S["pstate"]
-          if ps == "idle":
+          if ps in (None, "idle"):
               return False, "Cavo non collegato (Prism libera)"
           if target >= 100:
               free_charge("avvio manuale")
@@ -488,6 +522,14 @@ configs:
           sent = 0
           miss = 0
           while True:
+              with lock:
+                  quiet = S["pstate"] in (None, "idle") and not S["armed"] and not S["hold"] \
+                      and not S["acquiring"] and S["stop_tries"] == 0
+              if quiet:
+                  WAKE.wait(60)
+                  WAKE.clear()
+                  last_t = time.time()
+                  continue
               time.sleep(5)
               now = time.time()
               dt = now - last_t
@@ -540,6 +582,7 @@ configs:
                               and est >= S["target"] + EST_MARGIN:
                           cur, src = est, "stima di sicurezza"
                       S["src"] = src
+                      S["cur"] = cur
                       if cur is not None and cur >= S["target"]:
                           S["armed"] = False
                           S["stop_tries"] = 6
@@ -551,7 +594,7 @@ configs:
                           do_pause = True
                           log("Timeout di sicurezza: pausa")
                       elif S["prefix"] and S["pstate"] == "charging" \
-                              and now - last_refresh > min(REFRESH_SEC * (2 ** miss), 600):
+                              and now - last_refresh > min((REFRESH_FAR_SEC if cur is not None and S["target"] - cur > 3 else REFRESH_SEC) * (2 ** miss), 600):
                           miss = miss + 1 if (sent and S["soc_ts"] <= sent) else 0
                           refresh_topic = S["prefix"] + "/refresh/mode/set"
                           sent = now
@@ -650,6 +693,7 @@ configs:
           with lock:
               d = dict(S)
               d["est"] = estimate()
+              d["eta"] = eta_sec()
               d["age"] = int(time.time() - S["soc_ts"]) if S["soc_ts"] else None
           return d
 
@@ -695,9 +739,20 @@ configs:
       .row{display:flex;gap:8px;margin-top:12px}
       .row button{flex:1;min-height:50px;font-size:15px;font-weight:600;border:0;border-radius:12px;color:#fff}
       .row button:disabled{opacity:.5}
-      #go{background:#2ea043}#st{background:#da3633}#di{background:#4b5563}
-      #on{background:#1f6feb}
+      .row button{background:#232c38;color:#8b949e;border:2px solid transparent;transition:background .2s,color .2s,border-color .2s}
+      #go.act{background:#2ea043;color:#fff;border-color:#7ee2a0}
+      #st.act{background:#da3633;color:#fff;border-color:#ff9b95}
+      #di.act{background:#6b7280;color:#fff;border-color:#c9d1d9}
+      #on.act{background:#1f6feb;color:#fff;border-color:#9ecbff}
       #msg{margin-top:8px;min-height:18px}
+      .rw{display:flex;align-items:center;gap:12px}
+      #sub{flex:1;min-width:0;line-height:1.7;white-space:pre-line}
+      .eta{flex:none;width:78px;height:78px;background:#0d1117;border:1.5px solid #30363d;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
+      .eta small{font-size:11px;color:var(--mu)}
+      .eta b{font-size:26px;font-weight:700;line-height:1.1;letter-spacing:-.5px;color:var(--mu)}
+      .eta.g{border-color:var(--gr)}.eta.g b{color:var(--gr)}
+      .eta.a{border-color:var(--am)}.eta.a b{color:var(--am)}
+      .eta.f{border-color:#79c0ff}.eta.f b{color:#79c0ff}
       #lp{position:fixed;left:0;right:0;bottom:0;height:50vh;height:50dvh;background:#05080c;border-top:2px solid #30363d;display:flex;flex-direction:column;z-index:9;padding-bottom:env(safe-area-inset-bottom)}
       #lp.min{height:auto}
       #lp.min #lb,#lp.min .tab{display:none}
@@ -715,7 +770,7 @@ configs:
       <div class=c>
       <div class=big id=soc>?</div>
       <div class=bar><div class=fill id=fill></div><div class=tgt id=tgt></div></div>
-      <div class=sub id=sub>…</div>
+      <div class=rw><div class=eta id=eta><small id=etl>all'80%</small><b id=etv>--:--</b><small>ore:min</small></div><div class=sub id=sub>…</div></div>
       </div>
       <div class=c><div class=chips>
       <div class=chip><small>Stato Prism</small><b id=ps>–</b></div>
@@ -762,13 +817,20 @@ configs:
       .catch(function(){E('msg').textContent='Errore di rete'})
       .then(function(){load();loadLogs()})}
       function fw(w){return w==null?'–':(w>=1000?(w/1000).toFixed(2)+' kW':Math.round(w)+' W')}
+      function fa(s){if(s<90)return s+' s fa';var m=Math.round(s/60);if(m<90)return m+' min fa';var h=Math.floor(m/60);return h+' h '+(m%60)+' min fa'}
+      function fe(s){var m=Math.ceil(s/60);return Math.floor(m/60)+':'+('0'+(m%60)).slice(-2)}
+      function rEta(s){var c='eta',t='--:--',l=E('etl');l.textContent="all'"+s.target+'%';
+      if(s.target>=100){c='eta f';t='∞';l.textContent='libera'}
+      else if(s.acquiring){c='eta a';t='…'}
+      else if(s.eta!=null&&s.eta<360000){c='eta g';t=fe(s.eta)}
+      E('eta').className=c;E('etv').textContent=t}
       function load(){fetch('/api/status').then(function(r){return r.json()}).then(function(s){LS=s;
       if(!editing)E('t').value=s.once?s.base:s.target;
       var v=s.soc!=null?s.soc:s.est;
       if(s.armed&&s.est!=null&&s.src&&s.src!='cloud')v=s.est;
       E('soc').textContent=s.soc==null?'?':Math.round(s.soc)+'%';
       E('fill').style.width=(v==null?0:Math.max(0,Math.min(100,v)))+'%';
-      E('sub').textContent='Cloud: '+(s.age==null?'nessun dato':s.age+' s fa')+'  ·  Stima: '+(s.est==null?'–':s.est.toFixed(1)+'%')+'  ·  Fonte: '+(s.src||'–');
+      E('sub').textContent='Cloud: '+(s.age==null?'nessun dato':fa(s.age))+'\nStima: '+(s.est==null?'–':s.est.toFixed(1)+'%')+'\nFonte: '+(s.src||'–');rEta(s);
       var p=E('pill');
       if(s.acquiring){p.className='pill a';p.textContent='⏳ Attendo il SoC'}
       else if(s.armed){p.className='pill g';p.textContent='🟢 Armato → '+s.target+'%'}
@@ -778,6 +840,8 @@ configs:
       E('pm').textContent=s.pmode==null?'–':(MN[s.pmode]||s.pmode);
       E('pw').textContent=fw(s.w);
       E('on').textContent=s.once?'↩ Annulla 100%':'🔓 100% solo questa volta';
+      var a=s.once?'on':(s.armed||s.acquiring)?'go':s.pstate=='charging'?'di':(s.pstate=='pause'||s.pmode=='paused')?'st':'';
+      ['go','st','di','on'].forEach(function(k){E(k).classList.toggle('act',k==a)});
       document.title=(s.soc==null?'':Math.round(s.soc)+'% · ')+'Ricarica IA';mark()})
       .catch(function(){var p=E('pill');p.className='pill';p.textContent='⚠️ Offline'})}
       function sumTxt(){var s=LS;if(!s)return 'stato n/d';
@@ -796,7 +860,12 @@ configs:
       try{a.setSelectionRange(0,t.length)}catch(e){}
       var ok=false;try{ok=document.execCommand('copy')}catch(e){}document.body.removeChild(a);
       var b=E('cpb');b.textContent=ok?'✅ Copiato':'❌ Errore';setTimeout(function(){b.textContent='📋 Copia'},1500)}
-      setInterval(function(){load();n++;if(!isMin()||n%2==0)loadLogs()},3000);load();loadLogs();mark();
+      var lastL=0;
+      function logs(){lastL=Date.now();loadLogs()}
+      function tick(){if(!document.hidden){load();if(!isMin()||Date.now()-lastL>30000)logs()}
+      var o=LS&&LS.pstate=='idle'&&!LS.armed&&!LS.acquiring;setTimeout(tick,o?20000:3000)}
+      document.addEventListener('visibilitychange',function(){if(!document.hidden){load();logs()}});
+      load();logs();mark();setTimeout(tick,3000);
       </script>"""
 
       class H(BaseHTTPRequestHandler):
