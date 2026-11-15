@@ -38,6 +38,16 @@ Tested **only** with this combination:
 
 Only the battery reading goes through the cloud, and only while the cable is plugged in. Wallbox commands stay on your local network.
 
+### 🛑 How the stop is decided
+
+- **Backup estimate** = starting level + kWh delivered by the Prism × efficiency (`CHARGE_EFFICIENCY`, 0.92) ÷ capacity. It is recalibrated on every fresh cloud reading.
+- It stops when the **cloud reading** (no older than 10 min) reaches the target. If the cloud doesn't answer or is stale, the **estimate** decides.
+- If the cloud lags but the estimate exceeds the target by `EST_MARGIN` (1 point), the estimate wins ("safety estimate").
+- **Maximum theoretical overshoot: about `EST_MARGIN` percentage points.** At 2.8 kW the estimate advances about 0.2 points every 2 minutes, which is the refresh interval near the target.
+- The pause command is repeated until the Prism confirms "Pause". Safety timeout: 12 hours.
+- Cloud refreshes: every 2 min within 3 points of the target, every 10 min when further away; if the cloud doesn't answer the interval doubles (max 10 min).
+- The remaining charging time reported by the car (computed for 100%) is **not** used.
+
 <table>
   <tr>
     <td align="center"><img src="docs/img/1-attesa.webp" width="150"></td>
@@ -57,7 +67,9 @@ cp .env.example .env      # set SAIC_USER and SAIC_PASSWORD (secondary MG accoun
 docker compose up -d
 ```
 
-With Portainer: **Stacks → Add stack**, paste [`docker-compose.yml`](docker-compose.yml) and add `SAIC_USER` and `SAIC_PASSWORD` as environment variables.
+With Portainer: **Stacks → Add stack**, paste [`docker-compose.yml`](docker-compose.yml) and add `SAIC_USER` and `SAIC_PASSWORD` as stack environment variables.
+
+> 🔐 **Never write your email and password inside `docker-compose.yml`** and never commit your `.env` file: if you publish a fork, check `git diff` before pushing.
 
 Then open `http://RASPBERRY_IP:8088` from your phone.
 
@@ -72,6 +84,19 @@ In the `ev-limiter` service of [`docker-compose.yml`](docker-compose.yml):
 | `BATTERY_KWH` | `51` | Usable battery capacity |
 | `TARGET_SOC` | `80` | Initial limit (then change it from the web page) |
 | `AUTO_ARM` | `true` | Arms itself when the cable is plugged in |
+| `ACQUIRE_SEC` | `300` | How long it waits for the battery level on plug-in; then it stays paused and retries more slowly |
+| `REFRESH_SEC` | `120` | Seconds between cloud requests within 3 points of the target |
+| `REFRESH_FAR_SEC` | `600` | Same, when the target is further away |
+| `CHARGE_EFFICIENCY` | `0.92` | Efficiency used by the estimate (energy into the battery ÷ energy from the Prism) |
+| `EST_MARGIN` | `1.0` | Percentage points above the target after which the estimate stops charging anyway |
+| `SOC_STALE_SEC` | `600` | Older than this, the cloud reading is no longer considered fresh |
+| `GW_OFF` | `true` | Turns off the gateway's periodic polling: only Ricarica IA makes requests |
+
+In the `saic-gateway` service:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `MESSAGES_REQUEST_INTERVAL` | `900` | Seconds between message checks on the SAIC API (the gateway's own default is 60) |
 
 ## 📡 Setting up the Prism
 
@@ -84,8 +109,19 @@ In the **Silla** app: Settings → Access and communication → **Custom MQTT**
 
 Check: on the web page, State / Mode / Power must show values.
 
+## 🌍 Away from home with Tailscale
+
+The Prism stays on the local network and points to the Raspberry's **LAN** IP. Away from home, your phone only needs the web page:
+
+1. Install [Tailscale](https://tailscale.com/) on the Raspberry (on the host, not in a container) and on your phone.
+2. Open `http://RASPBERRY-NAME:8088` (MagicDNS name) or `http://100.x.y.z:8088` (Tailscale IP).
+3. Use Tailscale ACLs to allow only port `8088` from your own devices: `1883` is only needed by the Prism, on the LAN.
+
+❌ **Don't use `tailscale funnel`** and don't forward ports on your router: Funnel exposes the service to the whole Internet, and the page has no password.
+
 ## 🕹️ How to use it
 
+- The **all'80%** box (hours:min) shows the estimated time to the stop, computed from the Prism's power (`--:--` when not charging). The active button is highlighted.
 - **Avvia** (Start): reads the level and starts charging towards the target
 - **Stop**: pause and disarm
 - **Disarma** (Disarm): removes the limit, charging continues freely
@@ -95,7 +131,8 @@ Check: on the web page, State / Mode / Power must show values.
 
 ## ⚠️ Warning
 
-- The web page (port 8088) and the MQTT broker (1883) **have no password**: keep them **on the local network only**, never on the Internet.
+- The web page (port 8088) and the MQTT broker (1883) **have no password**: keep them **on the local network or Tailscale only**, never on the Internet.
+- The `ev-limiter` service mounts the Docker socket (`docker.sock`) only to show the other containers' logs. Even read-only, it gives full Docker access to the host: if you don't need it, remove the `/var/run/docker.sock` line (the **GW** and **BRK** log tabs will stop working).
 - If the car doesn't answer, charging stays paused: press **Disarma** (Disarm) to force it.
 - Tested only with MG4 Standard + Silla Prism Solar.
 
