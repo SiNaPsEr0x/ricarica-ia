@@ -160,6 +160,16 @@ La Prism resta in rete locale e punta all'IP **LAN** del Raspberry. Il telefono,
 - Se l'auto non risponde, la ricarica resta in pausa: premi **Disarma** per forzarla.
 - Provato solo con MG4 Standard + Silla Prism Solar.
 
+## ⭐ Stelle nel tempo
+
+<a href="https://star-history.com/#SiNaPsEr0x/ricarica-ia&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=SiNaPsEr0x/ricarica-ia&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=SiNaPsEr0x/ricarica-ia&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=SiNaPsEr0x/ricarica-ia&type=Date" width="100%" />
+  </picture>
+</a>
+
 ## 📄 Licenza
 
 MIT, uso a tuo rischio: controlla che la ricarica si fermi come previsto. Progetto indipendente, **non affiliato** a MG, SAIC, Silla o Raspberry Pi. Si appoggia a [SAIC Python MQTT Gateway](https://github.com/SAIC-iSmart-API/saic-python-mqtt-gateway) e [Eclipse Mosquitto](https://mosquitto.org/).

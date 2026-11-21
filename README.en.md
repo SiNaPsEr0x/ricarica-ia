@@ -160,6 +160,16 @@ The Prism stays on the local network and points to the Raspberry's **LAN** IP. A
 - If the car doesn't answer, charging stays paused: press **Disarma** (Disarm) to force it.
 - Tested only with MG4 Standard + Silla Prism Solar.
 
+## ⭐ Stars over time
+
+<a href="https://star-history.com/#SiNaPsEr0x/ricarica-ia&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=SiNaPsEr0x/ricarica-ia&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=SiNaPsEr0x/ricarica-ia&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=SiNaPsEr0x/ricarica-ia&type=Date" width="100%" />
+  </picture>
+</a>
+
 ## 📄 License
 
 MIT, use at your own risk: check that charging stops as expected. Independent project, **not affiliated** with MG, SAIC, Silla or Raspberry Pi. Built on [SAIC Python MQTT Gateway](https://github.com/SAIC-iSmart-API/saic-python-mqtt-gateway) and [Eclipse Mosquitto](https://mosquitto.org/).
