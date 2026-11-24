@@ -91,6 +91,8 @@ Il compose legge le credenziali con `${SAIC_USER}` e `${SAIC_PASSWORD}`: lascial
 
 **Stacks → il tuo stack → Editor**: lì cambi il compose (per esempio `TARGET_SOC` o `EST_MARGIN`) ed espandi **Environment variables** per le credenziali. Poi **Update the stack**; se hai tolto dei servizi spunta anche **Prune services**. Lo stato del limiter (sessione, target) è nel volume `pydeps`.
 
+> ⚠️ **Watchtower:** `ev-limiter` e `mosquitto` hanno la label `com.centurylinklabs.watchtower.enable: "false"`. Watchtower ricrea i container via API senza i file di `configs: content:` (`app.py`, `mosquitto.conf`): il limiter ripartirebbe in loop con `can't open file '/app/app.py'` e il limite non sarebbe applicato. Non togliere la label; per aggiornare le immagini usa **Update the stack** con **Re-pull image**.
+
 *Alternativa Git:* **Add stack → Git Repository** con Compose path `docker-compose.yml` e le stesse variabili. Gli stack da Git non hanno la scheda Editor: per cambiare le impostazioni serve un tuo fork del repo.
 
 *Senza Portainer* (terminale): `git clone`, `cp .env.example .env` (compila le due variabili), poi `docker compose up -d`.

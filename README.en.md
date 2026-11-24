@@ -91,6 +91,8 @@ The compose reads the credentials with `${SAIC_USER}` and `${SAIC_PASSWORD}`: le
 
 **Stacks → your stack → Editor**: change the compose there (for example `TARGET_SOC` or `EST_MARGIN`) and expand **Environment variables** for the credentials. Then **Update the stack**; if you removed services, also tick **Prune services**. The limiter's state (session, target) lives in the `pydeps` volume.
 
+> ⚠️ **Watchtower:** `ev-limiter` and `mosquitto` carry the label `com.centurylinklabs.watchtower.enable: "false"`. Watchtower recreates containers through the API without the `configs: content:` files (`app.py`, `mosquitto.conf`): the limiter would restart-loop with `can't open file '/app/app.py'` and no limit would be applied. Keep the label; to update images use **Update the stack** with **Re-pull image**.
+
 *Git alternative:* **Add stack → Git Repository** with Compose path `docker-compose.yml` and the same variables. Git stacks have no Editor tab: to change settings you need your own fork of the repo.
 
 *Without Portainer* (terminal): `git clone`, `cp .env.example .env` (fill in the two variables), then `docker compose up -d`.
