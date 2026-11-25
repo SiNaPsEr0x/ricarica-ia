@@ -900,7 +900,9 @@ configs:
       <div class=row><button id=go onclick="act('start')">▶ Avvia</button><button id=st onclick="act('stop')">⏸ Stop</button></div>
       <div class=row><button id=on onclick="once()">🔓 100% solo questa volta</button></div>
       <div style="margin-top:10px"><button id=msb onclick="msToggle()" style="background:none;border:0;color:#8b949e;font-size:13px;padding:4px 0;text-decoration:underline">✎ SoC manuale</button></div>
-      <div id=msp style="display:none;margin-top:6px;align-items:center;gap:8px"><input id=msv type=number inputmode=decimal min=1 max=100 placeholder="SoC %" style="width:80px;height:36px;border-radius:8px;border:1px solid #30363d;background:#0b0f14;color:#fff;padding:0 8px;font-size:15px"><button onclick="msSet()" style="height:36px;padding:0 14px;border:0;border-radius:8px;background:#30363d;color:#fff;font-size:13px">Imposta</button><span class=sub>solo se l'auto non risponde via Internet</span></div>
+      <div id=msp style="display:none;margin-top:8px"><div class=stp><span class=sub>SoC</span><button onclick="msAdj(-5)">−</button><input id=msv type=number inputmode=numeric value=80 min=1 max=100><button onclick="msAdj(5)">+</button><span class=sub>%</span></div>
+      <div class=row><button onclick="msSet()">✔ Imposta SoC</button></div>
+      <div class=sub style="margin-top:6px">Solo se l'auto non risponde via Internet</div></div>
       <div id=msn class=sub style="margin-top:6px;color:#d29922"></div>
       <div id=msg class=sub></div>
       </div>
@@ -931,11 +933,12 @@ configs:
       .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;editing=0})
       .catch(function(){E('msg').textContent='Errore di rete'})
       .then(function(){for(var i=0;i<all.length;i++)all[i].disabled=false;load();loadLogs()})}
-      function msToggle(){var p=E('msp');p.style.display=p.style.display=='flex'?'none':'flex';if(p.style.display=='flex')E('msv').focus()}
+      function msToggle(){var p=E('msp');p.style.display=p.style.display=='block'?'none':'block'}
+      function msAdj(d){var v=(+E('msv').value||80)+d;E('msv').value=Math.max(5,Math.min(100,v))}
       function msSet(){var v=parseFloat(E('msv').value);if(!(v>=1&&v<=100)){E('msg').textContent='Inserisci un SoC tra 1 e 100';return}
       E('msg').textContent='...';
       fetch('/api/soc',{method:'POST',body:JSON.stringify({soc:v})})
-      .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;if(j.ok){E('msv').value='';E('msp').style.display='none'}})
+      .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;if(j.ok)E('msp').style.display='none'})
       .catch(function(){E('msg').textContent='Errore di rete'})
       .then(function(){load();loadLogs()})}
       function once(){var on=!(LS&&LS.once);E('msg').textContent='...';
