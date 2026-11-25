@@ -149,7 +149,7 @@ The Prism stays on the local network and points to the Raspberry's **LAN** IP. A
 
 - The **all'80%** box (hours:min) shows the estimated time to the stop, computed from the Prism's power (`--:--` when not charging). The active button is highlighted.
 - **Avvia** (Start): reads the level and starts charging towards the target
-- **Stop**: pause and disarm
+- **✎ SoC manuale** (small link under the buttons): manually enter the starting SoC when the car doesn't answer over the Internet. A ✋ appears next to the value with a "manual SoC mode" notice; it turns off by itself as soon as the cloud sends a real reading (the estimate re-aligns). If charging is already armed, it recalculates from that value.
 - **100% solo questa volta** (100% just this once): free charge, then back to the usual target
 - **− / +**: change the target (20–100%)
 - **Log**: real-time journal
