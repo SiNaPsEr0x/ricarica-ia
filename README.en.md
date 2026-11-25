@@ -32,7 +32,7 @@ Tested **only** with this combination:
 ## 🧭 How it works
 
 1. You plug in the cable → charging is paused immediately.
-2. It reads the **real battery level** from the MG cloud (retries if the car doesn't answer).
+2. It reads the **real battery level** from the MG cloud (retries if the car doesn't answer; if it really doesn't, you can enter the **starting %** yourself).
 3. Charging starts and is **supervised** (car data + backup estimate from the kWh delivered).
 4. At the target → **automatic pause**.
 
@@ -63,11 +63,13 @@ Ricarica IA takes command of the Prism **even when it is already delivering powe
 
 <table>
   <tr>
-    <td align="center"><img src="docs/img/1-attesa.webp" width="150"></td>
-    <td align="center"><img src="docs/img/2-carica.webp" width="150"></td>
-    <td align="center"><img src="docs/img/3-stop.webp" width="150"></td>
-    <td align="center"><img src="docs/img/4-cento.webp" width="150"></td>
-    <td align="center"><img src="docs/img/5-log.webp" width="150"></td>
+    <td align="center"><img src="docs/img/1-attesa.webp" width="120"></td>
+    <td align="center"><img src="docs/img/2-carica.webp" width="120"></td>
+    <td align="center"><img src="docs/img/3-stop.webp" width="120"></td>
+    <td align="center"><img src="docs/img/4-cento.webp" width="120"></td>
+    <td align="center"><img src="docs/img/5-log.webp" width="120"></td>
+    <td align="center"><img src="docs/img/7-partenza.webp" width="120"></td>
+    <td align="center"><img src="docs/img/6-manuale.webp" width="120"></td>
   </tr>
 </table>
 
@@ -148,8 +150,8 @@ The Prism stays on the local network and points to the Raspberry's **LAN** IP. A
 ## 🕹️ How to use it
 
 - The **all'80%** box (hours:min) shows the estimated time to the stop, computed from the Prism's power (`--:--` when not charging). The active button is highlighted.
-- **Avvia** (Start): reads the level and starts charging towards the target
-- **✎ SoC manuale** (small link under the buttons): manually enter the starting SoC when the car doesn't answer over the Internet. A ✋ appears next to the value with a "manual SoC mode" notice; it turns off by itself as soon as the cloud sends a real reading (the estimate re-aligns). If charging is already armed, it recalculates from that value.
+- **Avvia** (Start): reads the level and starts charging towards the target. While charging the button turns into **Avviato** (Started) and fills with an animated green sweep, so you can tell at a glance that it's charging.
+- **✎ % di partenza manuale** (starting % by hand, small link under the buttons): type the percentage shown on the dashboard or in the MG app when the car doesn't answer over the Internet, then **✔ Imposta** (Set). Charging starts from that value and stops at the target. A ✋ appears next to the value with a yellow notice; it turns off by itself as soon as the cloud sends a real reading (the estimate re-aligns, charging isn't interrupted). **↺ Reset** cancels the manual % immediately and goes back to fully automatic.
 - **100% solo questa volta** (100% just this once): free charge, then back to the usual target
 - **− / +**: change the target (20–100%)
 - **Log**: real-time journal
