@@ -144,6 +144,7 @@ configs:
       EST_MARGIN = float(os.getenv("EST_MARGIN", "1.0"))
       TAKEOVER = os.getenv("TAKEOVER", "true").lower() == "true"
       TAKEOVER_COOLDOWN = int(os.getenv("TAKEOVER_COOLDOWN_SEC", "120"))
+      EST_SAVE_SEC = 30
       MAX_HOURS = 12
       DOCK = "/var/run/docker.sock"
       ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -256,17 +257,26 @@ configs:
                   soc_ts = float(d.get("soc_ts") or 0)
               except Exception:
                   soc, soc_ts = None, 0
-              return ses, bool(d.get("once")), soc, soc_ts, bool(d.get("soc_man")) and soc is not None
+              soc_man = bool(d.get("soc_man")) and soc is not None
+              soc_est = bool(d.get("soc_est")) and soc is not None
+              try:
+                  est = float(d["est"])
+                  est_ts = float(d.get("est_ts") or 0)
+              except Exception:
+                  est, est_ts = None, 0
+              if ses == "armed" and est is not None and est_ts and (soc is None or est_ts > soc_ts):
+                  soc, soc_ts, soc_est = est, est_ts, True
+              return ses, bool(d.get("once")), soc, soc_ts, soc_man, soc_est
           except Exception:
-              return None, False, None, 0, False
+              return None, False, None, 0, False, False
 
-      _ses0, _once0, _soc0, _soc_ts0, _soc_man0 = load_state()
+      _ses0, _once0, _soc0, _soc_ts0, _soc_man0, _soc_est0 = load_state()
 
       lock = threading.Lock()
       WAKE = threading.Event()
       LOG = deque(maxlen=120)
       MQ = deque(maxlen=150)
-      S = dict(soc=_soc0, soc_ts=_soc_ts0, soc_man=_soc_man0, prefix=None, pstate=None, pmode=None,
+      S = dict(soc=_soc0, soc_ts=_soc_ts0, soc_man=_soc_man0, soc_est=_soc_est0, est_soc=None, est_ts=0, est_saved=0, prefix=None, pstate=None, pmode=None,
                w=None, w_ts=0, armed=False, acquiring=False, target=100 if _once0 else load_target(),
                start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
                stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
@@ -277,7 +287,8 @@ configs:
           try:
               tmp = SFILE + ".tmp"
               with open(tmp, "w") as f:
-                  json.dump({"ses": S["ses"], "once": S["once"], "soc": S["soc"], "soc_ts": S["soc_ts"], "soc_man": S["soc_man"]}, f)
+                  json.dump({"ses": S["ses"], "once": S["once"], "soc": S["soc"], "soc_ts": S["soc_ts"], "soc_man": S["soc_man"], "soc_est": S["soc_est"],
+                             "est": S["est_soc"] if S["armed"] else None, "est_ts": S["est_ts"]}, f)
               os.replace(tmp, SFILE)
           except Exception:
               pass
@@ -344,6 +355,7 @@ configs:
                           S["soc"] = float(p)
                           S["soc_ts"] = now
                           S["soc_man"] = False
+                          S["soc_est"] = False
                           _save_locked()
                       except ValueError:
                           pass
@@ -465,7 +477,7 @@ configs:
           with lock:
               S.update(armed=True, target=target, start_soc=soc, soc0=soc, e_wh=0.0,
                        armed_at=time.time(), cal_ts=time.time(), stop_tries=0,
-                       hold=False, free=False, src="", cur=soc, blind=blind)
+                       hold=False, free=False, src="", cur=soc, blind=blind, est_saved=0)
               _ses_locked("armed")
           start_charge()
           log("Avvio da %.0f%% verso %d%%" % (soc, target))
@@ -598,6 +610,7 @@ configs:
               S["soc"] = float(v)
               S["soc_ts"] = time.time()
               S["soc_man"] = True
+              S["soc_est"] = False
               _save_locked()
               ps = S["pstate"]
               armed = S["armed"]
@@ -622,6 +635,7 @@ configs:
               S["soc"] = None
               S["soc_ts"] = 0
               S["soc_man"] = False
+              S["soc_est"] = False
               _save_locked()
           log("% di partenza manuale annullata: di nuovo tutto automatico")
           return True, "Tornato in automatico: il SoC lo legge il cloud"
@@ -709,6 +723,11 @@ configs:
                           cur, src = est, "stima di sicurezza"
                       S["src"] = src
                       S["cur"] = cur
+                      if cur is not None and now - S["est_saved"] > EST_SAVE_SEC:
+                          S["est_saved"] = now
+                          S["est_soc"] = cur
+                          S["est_ts"] = now
+                          _save_locked()
                       if cur is not None and cur >= S["target"]:
                           S["armed"] = False
                           S["stop_tries"] = 6
@@ -981,7 +1000,7 @@ configs:
       E('soc').textContent=s.soc==null?'?':Math.round(s.soc)+'%'+(s.soc_man?' ✋':'');
       E('msn').textContent=s.soc_man?'✋ % di partenza manuale: '+Math.round(s.soc)+'% inserita a mano (la carica parte da qui). Si disattiva da sola appena il cloud risponde, oppure premi Reset.':'';
       E('fill').style.width=(v==null?0:Math.max(0,Math.min(100,v)))+'%';
-      E('sub').textContent=(s.soc_man?'Partenza manuale: ':'Cloud: ')+(s.age==null?'nessun dato':fa(s.age))+'\nStima: '+(s.est==null?'–':s.est.toFixed(1)+'%')+'\nFonte: '+(s.src||'–');rEta(s);
+      E('sub').textContent=(s.soc_man?'Partenza manuale: ':(s.soc_est?'Stima salvata: ':'Cloud: '))+(s.age==null?'nessun dato':fa(s.age))+'\nStima: '+(s.est==null?'–':s.est.toFixed(1)+'%')+'\nFonte: '+(s.src||'–');rEta(s);
       var p=E('pill');
       if(s.acquiring){p.className='pill a';p.textContent='⏳ Attendo il SoC'}
       else if(s.armed){p.className='pill g';p.textContent='🟢 Armato → '+s.target+'%'}

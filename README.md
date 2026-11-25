@@ -53,7 +53,7 @@ Solo la lettura della batteria passa dal cloud, e solo a cavo inserito. I comand
 Ricarica IA prende il comando della Prism **anche se sta già erogando corrente**:
 
 - Se la Prism sta caricando e il limite non è armato (riavvio dello stack, blackout, carica avviata dall'app Silla), mette in **pausa**, legge il livello dal cloud e **si riarma** verso il target. Se il livello è già a target, resta in pausa.
-- La sessione (armata / a target / stop / libera) e il "100% solo questa volta" sono **salvati su file** (`/deps/state.json`, volume `pydeps`) e sopravvivono al riavvio.
+- La sessione (armata / a target / stop / libera) e il "100% solo questa volta" sono **salvati su file** (`/deps/state.json`, volume `pydeps`) e sopravvivono al riavvio. Durante la carica salva anche la **stima del livello** ogni 30 secondi: dopo un riavvio dello stack riparte da lì (etichetta "Stima salvata") invece di perdere l'energia già erogata; solo se la sessione era armata, e scartata con Stop, fine carica o cavo scollegato.
 - Lo **Stop** manuale viene rispettato anche dopo un riavvio: finché il cavo resta collegato non riprende il controllo. Scollegando il cavo si riparte da zero.
 - Se la Prism stessa si riavvia e rileva di nuovo il cavo, la sessione è trattata come nuova e il limite viene applicato.
 - Anti-loop: tra due prese di controllo passano almeno `TAKEOVER_COOLDOWN_SEC` secondi (120).
