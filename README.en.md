@@ -54,7 +54,7 @@ Ricarica IA takes command of the Prism **even when it is already delivering powe
 
 - If the Prism is charging and the limit is not armed (stack restart, blackout, charge started from the Silla app), it **pauses**, reads the level from the cloud and **re-arms** towards the target. If the level is already at the target, it stays paused.
 - The session (armed / at target / stop / free) and "100% just this once" are **saved to a file** (`/deps/state.json`, `pydeps` volume) and survive restarts. While charging it also saves the **level estimate** every 30 seconds: after a stack restart it resumes from there (labelled "Stima salvata") instead of losing the energy already delivered. Only if the session was armed; discarded on Stop, end of charge or cable unplugged.
-- Manual **Stop** is respected after a restart too: while the cable stays plugged in it won't take control again. Unplugging the cable starts fresh.
+- Manual **Stop** is respected after a restart too: while the cable stays plugged in it won't take control again. Unplugging the cable starts fresh: the last known level (cloud, estimate or manual %) is also cleared, because the car will be used and its level is unknown.
 - If the Prism itself reboots and detects the cable again, the session is treated as new and the limit is applied.
 - Anti-loop: at least `TAKEOVER_COOLDOWN_SEC` seconds (120) between two takeovers.
 - Mosquitto saves its data every 30 seconds (`autosave_interval`, default is 30 minutes): after a blackout the restored data is recent.
