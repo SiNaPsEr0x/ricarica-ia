@@ -557,8 +557,14 @@ configs:
           with lock:
               S["acquiring"] = False
           if soc is None:
-              log("Avvia manuale: SoC non ricevuto, non avvio")
-              return False, "SoC non ricevuto: non avvio"
+              with lock:
+                  last, last_ts = S["soc"], S["soc_ts"]
+              if last is None:
+                  log("Avvia manuale: nessun SoC noto, non avvio")
+                  return False, "SoC mai ricevuto: non avvio"
+              age = int(time.time() - last_ts) if last_ts else -1
+              log("Avvia manuale: SoC non ricevuto, parto dall'ultimo noto (%.0f%%, %d s fa) e riprovo strada facendo" % (last, age))
+              soc = last
           return arm(target, soc)
 
       def stop():
