@@ -514,11 +514,17 @@ configs:
           with lock:
               S["hold"] = True
           set_mode(3)
+          blind = False
           soc = get_fresh_soc(plug_ts, ACQUIRE_SEC, 60, 300, True)
           if soc is None:
               with lock:
                   alive = S["hold"] and S["pstate"] != "idle"
-              if alive:
+                  last, last_ts = S["soc"], S["soc_ts"]
+                  tgt = S["target"]
+              if alive and last is not None and last < tgt:
+                  log("SoC non ricevuto in %d s: parto dall'ultimo noto (%.0f%%, %d s fa) e riprovo strada facendo" % (ACQUIRE_SEC, last, int(time.time() - last_ts) if last_ts else -1))
+                  soc, blind = last, True
+              elif alive:
                   log("SoC non ricevuto in %d s: resto in pausa e riprovo con pause crescenti (max 10 min)" % ACQUIRE_SEC)
                   soc = get_fresh_soc(plug_ts, 30 * 24 * 3600, 300, 600, True)
           with lock:
@@ -531,7 +537,7 @@ configs:
           if tgt >= 100:
               free_charge("target cambiato durante l'attesa")
               return
-          ok, msg = arm(tgt, soc)
+          ok, msg = arm(tgt, soc, blind)
           log("Auto: " + msg)
           if not ok:
               with lock:
