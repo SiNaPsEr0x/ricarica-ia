@@ -382,6 +382,10 @@ configs:
                           log("Cavo scollegato: disarmato")
                       if not msg.retain:
                           _ses_locked(None)
+                          if S["soc"] is not None or S["est_soc"] is not None:
+                              log("Cavo scollegato: ultimo livello azzerato (l'auto verrà usata)")
+                          S.update(soc=None, soc_ts=0, soc_man=False, soc_est=False, est_soc=None, est_ts=0)
+                          _save_locked()
                   why = None
                   if S["pstate"] == "waiting" or \
                           (prev == "idle" and S["pstate"] not in (None, "idle")):
