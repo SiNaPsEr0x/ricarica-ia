@@ -150,6 +150,7 @@ La Prism resta in rete locale e punta all'IP **LAN** del Raspberry. Il telefono,
 - Il riquadro **all'80%** (ore:min) mostra il tempo stimato allo stop, calcolato dalla potenza della Prism (`--:--` se non sta caricando). Il pulsante attivo è evidenziato.
 - **Avvia**: legge il livello e avvia la carica verso il target
 - **Stop**: pausa e disarma
+- **✎ SoC manuale** (link piccolo sotto i pulsanti): inserisci a mano il SoC di partenza quando l'auto non risponde via Internet. Compare ✋ accanto al valore e l'avviso "Modalità SoC manuale"; si disattiva da sola appena il cloud invia una lettura vera (la stima si riallinea). Se la carica è già armata, ricalcola da quel valore.
 - **100% solo questa volta**: carica libera, poi torna al target abituale
 - **− / +**: cambia il target (20–100%)
 - **Log**: diario in tempo reale
