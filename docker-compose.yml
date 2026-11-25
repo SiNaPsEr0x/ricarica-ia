@@ -140,6 +140,7 @@ configs:
       REFRESH_SEC = int(os.getenv("REFRESH_SEC", "120"))
       REFRESH_FAR_SEC = int(os.getenv("REFRESH_FAR_SEC", "600"))
       STALE_SEC = int(os.getenv("SOC_STALE_SEC", "600"))
+      PRISM_STALE_SEC = int(os.getenv("PRISM_STALE_SEC", "900"))
       EST_MARGIN = float(os.getenv("EST_MARGIN", "1.0"))
       TAKEOVER = os.getenv("TAKEOVER", "true").lower() == "true"
       TAKEOVER_COOLDOWN = int(os.getenv("TAKEOVER_COOLDOWN_SEC", "120"))
@@ -265,7 +266,7 @@ configs:
                start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
                stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
                base=load_target(), once=_once0, once_seen=False, once_idle=0, cur=None, off_boot=False,
-               ses=_ses0, take_ts=0, blind=False)
+               ses=_ses0, take_ts=0, blind=False, p_ts=time.time(), pstale=False)
 
       def _save_locked():
           try:
@@ -322,6 +323,11 @@ configs:
               MQ.append(now_s() + short(t) + " = " + p[:60])
           with lock:
               now = time.time()
+              if not msg.retain and t in (T("state"), T("mode"), T("w")):
+                  S["p_ts"] = now
+                  if S["pstale"]:
+                      S["pstale"] = False
+                      LOG.append(now_s() + "Prism di nuovo online")
               if t.startswith("saic/") and "/drivetrain/" in t:
                   S["prefix"] = t.split("/drivetrain/")[0]
                   if GW_OFF and not S["off_boot"]:
@@ -552,6 +558,8 @@ configs:
           with lock:
               S["hold"] = False
               ps = S["pstate"]
+          if S["pstale"]:
+              return False, "Prism non risponde: non avvio"
           if ps in (None, "idle"):
               return False, "Cavo non collegato (Prism libera)"
           if target >= 100:
@@ -603,6 +611,9 @@ configs:
           miss = 0
           while True:
               with lock:
+                  if time.time() - S["p_ts"] > PRISM_STALE_SEC and not S["pstale"]:
+                      S["pstale"] = True
+                      LOG.append(now_s() + "ATTENZIONE: Prism non pubblica da oltre %d s (offline?), stato e comandi non affidabili" % PRISM_STALE_SEC)
                   quiet = S["pstate"] in (None, "idle") and not S["armed"] and not S["hold"] \
                       and not S["acquiring"] and S["stop_tries"] == 0
               if quiet:
@@ -920,7 +931,7 @@ configs:
       else if(s.armed){p.className='pill g';p.textContent='🟢 Armato → '+s.target+'%'}
       else if(s.target>=100){p.className='pill f';p.textContent=s.once?'🔓 100% una tantum':'🔓 Senza limite'}
       else{p.className='pill';p.textContent='⚪ Non armato'}
-      E('ps').textContent=s.pstate==null?'–':(SN[s.pstate]||s.pstate);
+      E('ps').textContent=s.pstale?'⚠️ Offline':(s.pstate==null?'–':(SN[s.pstate]||s.pstate));
       E('pm').textContent=s.pmode==null?'–':(MN[s.pmode]||s.pmode);
       E('pw').textContent=fw(s.w);
       E('on').textContent=s.once?'↩ Annulla 100%':'🔓 100% solo questa volta';
@@ -957,11 +968,14 @@ configs:
               pass
           def _send(self, code, body, ctype="application/json"):
               b = body if isinstance(body, bytes) else body.encode()
-              self.send_response(code)
-              self.send_header("Content-Type", ctype)
-              self.send_header("Content-Length", str(len(b)))
-              self.end_headers()
-              self.wfile.write(b)
+              try:
+                  self.send_response(code)
+                  self.send_header("Content-Type", ctype)
+                  self.send_header("Content-Length", str(len(b)))
+                  self.end_headers()
+                  self.wfile.write(b)
+              except (BrokenPipeError, ConnectionResetError):
+                  pass
           def do_GET(self):
               p = self.path.split("?")[0]
               if p == "/api/status":
