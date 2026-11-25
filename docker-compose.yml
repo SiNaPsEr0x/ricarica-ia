@@ -899,9 +899,9 @@ configs:
       <div id=tn class=sub style="margin-top:8px"></div>
       <div class=row><button id=go onclick="act('start')">▶ Avvia</button><button id=st onclick="act('stop')">⏸ Stop</button></div>
       <div class=row><button id=on onclick="once()">🔓 100% solo questa volta</button></div>
-      <div style="margin-top:10px"><button id=msb onclick="msToggle()" style="background:none;border:0;color:#8b949e;font-size:13px;padding:4px 0;text-decoration:underline">✎ SoC manuale</button></div>
-      <div id=msp style="display:none;margin-top:8px"><div class=stp><span class=sub>SoC</span><button onclick="msAdj(-5)">−</button><input id=msv type=number inputmode=numeric value=80 min=1 max=100><button onclick="msAdj(5)">+</button><span class=sub>%</span></div>
-      <div class=row><button onclick="msSet()">✔ Imposta SoC</button></div>
+      <div style="margin-top:10px"><button id=msb onclick="msToggle()" style="background:none;border:0;color:#8b949e;font-size:13px;padding:4px 0;text-decoration:underline">✎ % di partenza manuale</button></div>
+      <div id=msp style="display:none;margin-top:8px"><div class=stp><span class=sub>% di partenza</span><input id=msv type=number inputmode=decimal min=1 max=100 placeholder="es. 45" style="flex:1;min-width:0"><span class=sub>%</span></div>
+      <div class=row><button onclick="msSet()">✔ Imposta % di partenza</button></div>
       <div class=sub style="margin-top:6px">Solo se l'auto non risponde via Internet</div></div>
       <div id=msn class=sub style="margin-top:6px;color:#d29922"></div>
       <div id=msg class=sub></div>
@@ -934,8 +934,7 @@ configs:
       .catch(function(){E('msg').textContent='Errore di rete'})
       .then(function(){for(var i=0;i<all.length;i++)all[i].disabled=false;load();loadLogs()})}
       function msToggle(){var p=E('msp');p.style.display=p.style.display=='block'?'none':'block'}
-      function msAdj(d){var v=(+E('msv').value||80)+d;E('msv').value=Math.max(5,Math.min(100,v))}
-      function msSet(){var v=parseFloat(E('msv').value);if(!(v>=1&&v<=100)){E('msg').textContent='Inserisci un SoC tra 1 e 100';return}
+      function msSet(){var v=parseFloat(E('msv').value);if(!(v>=1&&v<=100)){E('msg').textContent='Inserisci una % tra 1 e 100';return}
       E('msg').textContent='...';
       fetch('/api/soc',{method:'POST',body:JSON.stringify({soc:v})})
       .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;if(j.ok)E('msp').style.display='none'})
