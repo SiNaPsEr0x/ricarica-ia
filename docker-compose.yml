@@ -9,8 +9,8 @@
 #    - BATTERY_KWH / TARGET_SOC   -> capacita' della tua batteria e limite desiderato
 #
 #  PRESA DI CONTROLLO: se la Prism sta caricando senza limite (es. dopo un blackout) il
-#  limiter la ferma, legge il SoC e si riarma da solo (TAKEOVER=true). Stop e Disarma
-#  manuali vengono ricordati anche dopo un riavvio.
+#  limiter la ferma, legge il SoC e si riarma da solo (TAKEOVER=true). Lo Stop
+#  manuale viene ricordato anche dopo un riavvio.
 #
 #  WATCHTOWER: mosquitto ed ev-limiter sono esclusi (label enable=false) perche'
 #  Watchtower li ricrea senza i file di configs: content: (app.py / mosquitto.conf).
@@ -251,17 +251,22 @@ configs:
               ses = d.get("ses")
               if ses not in ("armed", "done", "stopped", "free"):
                   ses = None
-              return ses, bool(d.get("once"))
+              try:
+                  soc = float(d["soc"])
+                  soc_ts = float(d.get("soc_ts") or 0)
+              except Exception:
+                  soc, soc_ts = None, 0
+              return ses, bool(d.get("once")), soc, soc_ts
           except Exception:
-              return None, False
+              return None, False, None, 0
 
-      _ses0, _once0 = load_state()
+      _ses0, _once0, _soc0, _soc_ts0 = load_state()
 
       lock = threading.Lock()
       WAKE = threading.Event()
       LOG = deque(maxlen=120)
       MQ = deque(maxlen=150)
-      S = dict(soc=None, soc_ts=0, prefix=None, pstate=None, pmode=None,
+      S = dict(soc=_soc0, soc_ts=_soc_ts0, prefix=None, pstate=None, pmode=None,
                w=None, w_ts=0, armed=False, acquiring=False, target=100 if _once0 else load_target(),
                start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
                stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
@@ -272,7 +277,7 @@ configs:
           try:
               tmp = SFILE + ".tmp"
               with open(tmp, "w") as f:
-                  json.dump({"ses": S["ses"], "once": S["once"]}, f)
+                  json.dump({"ses": S["ses"], "once": S["once"], "soc": S["soc"], "soc_ts": S["soc_ts"]}, f)
               os.replace(tmp, SFILE)
           except Exception:
               pass
@@ -338,6 +343,7 @@ configs:
                       try:
                           S["soc"] = float(p)
                           S["soc_ts"] = now
+                          _save_locked()
                       except ValueError:
                           pass
               elif t.startswith("saic/") and t.endswith("/refresh/mode"):
@@ -592,17 +598,6 @@ configs:
           set_mode(3)
           log("Stop manuale")
           return True, "Pausa inviata"
-
-      def disarm():
-          with lock:
-              S["armed"] = False
-              was_hold = S["hold"]
-              S["hold"] = False
-              _ses_locked("free")
-          if was_hold:
-              start_charge()
-          log("Disarmato: la carica continua senza limite")
-          return True, "Disarmato"
 
       def watcher():
           last_t = time.time()
@@ -875,7 +870,7 @@ configs:
       <div class=c>
       <div class=stp><span class=sub>Target</span><button onclick="adj(-5)">−</button><input id=t type=number inputmode=numeric value=80 min=20 max=100 oninput="editing=1;mark()" onchange="adj(0)"><button onclick="adj(5)">+</button><span class=sub>%</span></div>
       <div id=tn class=sub style="margin-top:8px"></div>
-      <div class=row><button id=go onclick="act('start')">▶ Avvia</button><button id=st onclick="act('stop')">⏸ Stop</button><button id=di onclick="act('disarm')">Disarma</button></div>
+      <div class=row><button id=go onclick="act('start')">▶ Avvia</button><button id=st onclick="act('stop')">⏸ Stop</button></div>
       <div class=row><button id=on onclick="once()">🔓 100% solo questa volta</button></div>
       <div id=msg class=sub></div>
       </div>
@@ -935,8 +930,8 @@ configs:
       E('pm').textContent=s.pmode==null?'–':(MN[s.pmode]||s.pmode);
       E('pw').textContent=fw(s.w);
       E('on').textContent=s.once?'↩ Annulla 100%':'🔓 100% solo questa volta';
-      var a=s.once?'on':(s.armed||s.acquiring)?'go':s.pstate=='charging'?'di':(s.pstate=='pause'||s.pmode=='paused')?'st':'';
-      ['go','st','di','on'].forEach(function(k){E(k).classList.toggle('act',k==a)});
+      var a=s.once?'on':(s.armed||s.acquiring)?'go':s.pstate=='charging'?'':(s.pstate=='pause'||s.pmode=='paused')?'st':'';
+      ['go','st','on'].forEach(function(k){E(k).classList.toggle('act',k==a)});
       document.title=(s.soc==null?'':Math.round(s.soc)+'% · ')+'Ricarica IA';mark()})
       .catch(function(){var p=E('pill');p.className='pill';p.textContent='⚠️ Offline'})}
       function sumTxt(){var s=LS;if(!s)return 'stato n/d';
@@ -1001,8 +996,6 @@ configs:
                       ok, msg = start(int(data.get("target", DEF_TARGET)))
                   elif self.path == "/api/stop":
                       ok, msg = stop()
-                  elif self.path == "/api/disarm":
-                      ok, msg = disarm()
                   elif self.path == "/api/target":
                       t = set_target(int(data.get("target", DEF_TARGET)))
                       ok, msg = True, "Target " + str(t) + "%"

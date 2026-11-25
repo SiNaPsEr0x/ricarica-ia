@@ -54,11 +54,11 @@ Ricarica IA prende il comando della Prism **anche se sta già erogando corrente*
 
 - Se la Prism sta caricando e il limite non è armato (riavvio dello stack, blackout, carica avviata dall'app Silla), mette in **pausa**, legge il livello dal cloud e **si riarma** verso il target. Se il livello è già a target, resta in pausa.
 - La sessione (armata / a target / stop / libera) e il "100% solo questa volta" sono **salvati su file** (`/deps/state.json`, volume `pydeps`) e sopravvivono al riavvio.
-- **Stop** e **Disarma** manuali vengono rispettati anche dopo un riavvio: finché il cavo resta collegato non riprende il controllo. Scollegando il cavo si riparte da zero.
+- Lo **Stop** manuale viene rispettato anche dopo un riavvio: finché il cavo resta collegato non riprende il controllo. Scollegando il cavo si riparte da zero.
 - Se la Prism stessa si riavvia e rileva di nuovo il cavo, la sessione è trattata come nuova e il limite viene applicato.
 - Anti-loop: tra due prese di controllo passano almeno `TAKEOVER_COOLDOWN_SEC` secondi (120).
 - Mosquitto salva i messaggi ogni 30 secondi (`autosave_interval`, il predefinito è 30 minuti): dopo un blackout i dati ripristinati sono recenti.
-- Se il cloud non risponde, la carica resta in pausa finché non arriva il livello: premi **Disarma** per forzarla.
+- Se il cloud non risponde, la carica resta in pausa finché non arriva il livello. Premendo **Avvia** parte dall'ultima lettura SoC (salvata su file, anche dopo un riavvio) e durante la carica riprende il controllo della %.
 - Per tornare al comportamento precedente (arma solo al collegamento del cavo): `TAKEOVER=false`.
 
 <table>
@@ -150,7 +150,6 @@ La Prism resta in rete locale e punta all'IP **LAN** del Raspberry. Il telefono,
 - Il riquadro **all'80%** (ore:min) mostra il tempo stimato allo stop, calcolato dalla potenza della Prism (`--:--` se non sta caricando). Il pulsante attivo è evidenziato.
 - **Avvia**: legge il livello e avvia la carica verso il target
 - **Stop**: pausa e disarma
-- **Disarma**: toglie il limite, la carica continua libera
 - **100% solo questa volta**: carica libera, poi torna al target abituale
 - **− / +**: cambia il target (20–100%)
 - **Log**: diario in tempo reale
@@ -159,7 +158,7 @@ La Prism resta in rete locale e punta all'IP **LAN** del Raspberry. Il telefono,
 
 - La pagina web (porta 8088) e il broker MQTT (1883) **non hanno password**: tienili **solo in rete locale o in Tailscale**, mai su Internet.
 - Il servizio `ev-limiter` monta il socket Docker (`docker.sock`) solo per mostrare i log degli altri container. Anche in sola lettura dà accesso completo a Docker sull'host: se non ti serve, togli la riga `/var/run/docker.sock` (i tab **GW** e **BRK** del log non funzioneranno).
-- Se l'auto non risponde, la ricarica resta in pausa: premi **Disarma** per forzarla.
+- Se l'auto non risponde, la ricarica resta in pausa: premi **Avvia** per partire dall'ultima lettura SoC nota.
 - Provato solo con MG4 Standard + Silla Prism Solar.
 
 ## 📄 Licenza

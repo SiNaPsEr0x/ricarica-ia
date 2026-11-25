@@ -54,11 +54,11 @@ Ricarica IA takes command of the Prism **even when it is already delivering powe
 
 - If the Prism is charging and the limit is not armed (stack restart, blackout, charge started from the Silla app), it **pauses**, reads the level from the cloud and **re-arms** towards the target. If the level is already at the target, it stays paused.
 - The session (armed / at target / stop / free) and "100% just this once" are **saved to a file** (`/deps/state.json`, `pydeps` volume) and survive restarts.
-- Manual **Stop** and **Disarma** (Disarm) are respected after a restart too: while the cable stays plugged in it won't take control again. Unplugging the cable starts fresh.
+- Manual **Stop** is respected after a restart too: while the cable stays plugged in it won't take control again. Unplugging the cable starts fresh.
 - If the Prism itself reboots and detects the cable again, the session is treated as new and the limit is applied.
 - Anti-loop: at least `TAKEOVER_COOLDOWN_SEC` seconds (120) between two takeovers.
 - Mosquitto saves its data every 30 seconds (`autosave_interval`, default is 30 minutes): after a blackout the restored data is recent.
-- If the cloud doesn't answer, charging stays paused until the level arrives: press **Disarma** (Disarm) to force it.
+- If the cloud doesn't answer, charging stays paused until the level arrives. Pressing **Start** begins from the last known SoC reading (saved to file, survives restarts) and the % limit control resumes while charging.
 - To get the previous behaviour back (arm only when the cable is plugged in): `TAKEOVER=false`.
 
 <table>
@@ -150,7 +150,6 @@ The Prism stays on the local network and points to the Raspberry's **LAN** IP. A
 - The **all'80%** box (hours:min) shows the estimated time to the stop, computed from the Prism's power (`--:--` when not charging). The active button is highlighted.
 - **Avvia** (Start): reads the level and starts charging towards the target
 - **Stop**: pause and disarm
-- **Disarma** (Disarm): removes the limit, charging continues freely
 - **100% solo questa volta** (100% just this once): free charge, then back to the usual target
 - **− / +**: change the target (20–100%)
 - **Log**: real-time journal
@@ -159,7 +158,7 @@ The Prism stays on the local network and points to the Raspberry's **LAN** IP. A
 
 - The web page (port 8088) and the MQTT broker (1883) **have no password**: keep them **on the local network or Tailscale only**, never on the Internet.
 - The `ev-limiter` service mounts the Docker socket (`docker.sock`) only to show the other containers' logs. Even read-only, it gives full Docker access to the host: if you don't need it, remove the `/var/run/docker.sock` line (the **GW** and **BRK** log tabs will stop working).
-- If the car doesn't answer, charging stays paused: press **Disarma** (Disarm) to force it.
+- If the car doesn't answer, charging stays paused: press **Start** to begin from the last known SoC reading.
 - Tested only with MG4 Standard + Silla Prism Solar.
 
 ## 📄 License
