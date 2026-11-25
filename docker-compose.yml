@@ -603,17 +603,17 @@ configs:
               armed = S["armed"]
               tgt = S["target"]
               acq = S["acquiring"]
-          log("% di partenza manuale impostata: %.0f%% (finché il cloud non risponde)" % v)
+          log("%% di partenza manuale impostata: %.0f%% (finché il cloud non risponde)" % v)
           if ps in (None, "idle"):
-              return True, "% di partenza %.0f%% salvata: Avvia partirà da qui (cavo non collegato)" % v
+              return True, "%% di partenza %.0f%% salvata: Avvia partirà da qui (cavo non collegato)" % v
           if tgt >= 100:
-              return True, "% di partenza %.0f%% salvata (target 100%%: nessun limite da gestire)" % v
+              return True, "%% di partenza %.0f%% salvata (target 100%%: nessun limite da gestire)" % v
           if armed:
               ok, msg = arm(tgt, float(v), True)
               return ok, "Partenza da %.0f%%: " % v + msg
           if acq:
-              return True, "% di partenza %.0f%% salvata: la carica parte da qui" % v
-          return True, "% di partenza %.0f%% salvata: premi Avvia" % v
+              return True, "%% di partenza %.0f%% salvata: la carica parte da qui" % v
+          return True, "%% di partenza %.0f%% salvata: premi Avvia" % v
 
       def reset_manual_soc():
           with lock:
@@ -698,10 +698,10 @@ configs:
                           S["e_wh"] = 0.0
                           S["cal_ts"] = S["soc_ts"]
                           S["blind"] = False
-                          log("Stima riallineata al cloud: %.1f%%" % S["soc"])
+                          log(("Stima riallineata alla %% di partenza manuale: %.1f%%" if S["soc_man"] else "Stima riallineata al cloud: %.1f%%") % S["soc"])
                       est = estimate()
                       if sync:
-                          cur, src = S["soc"], "cloud"
+                          cur, src = S["soc"], ("manuale" if S["soc_man"] else "cloud")
                       else:
                           cur, src = est, "stima"
                       if cur is not None and est is not None and cur < S["target"] \
