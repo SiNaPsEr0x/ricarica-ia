@@ -615,6 +615,17 @@ configs:
               return True, "% di partenza %.0f%% salvata: la carica parte da qui" % v
           return True, "% di partenza %.0f%% salvata: premi Avvia" % v
 
+      def reset_manual_soc():
+          with lock:
+              if not S["soc_man"]:
+                  return True, "Già in automatico"
+              S["soc"] = None
+              S["soc_ts"] = 0
+              S["soc_man"] = False
+              _save_locked()
+          log("% di partenza manuale annullata: di nuovo tutto automatico")
+          return True, "Tornato in automatico: il SoC lo legge il cloud"
+
       def stop():
           with lock:
               S["armed"] = False
@@ -901,7 +912,7 @@ configs:
       <div class=row><button id=on onclick="once()">🔓 100% solo questa volta</button></div>
       <div style="margin-top:10px"><button id=msb onclick="msToggle()" style="background:none;border:0;color:#8b949e;font-size:13px;padding:4px 0;text-decoration:underline">✎ % di partenza manuale</button></div>
       <div id=msp style="display:none;margin-top:8px"><div class=stp><span class=sub>% di partenza</span><input id=msv type=number inputmode=decimal min=1 max=100 placeholder="es. 45" style="flex:1;min-width:0"><span class=sub>%</span></div>
-      <div class=row><button onclick="msSet()">✔ Imposta % di partenza</button></div>
+      <div class=row><button onclick="msSet()">✔ Imposta</button><button onclick="msReset()" style="flex:none;padding:0 16px">↺ Reset</button></div>
       <div class=sub style="margin-top:6px">È la % di batteria che l'auto ha <b>adesso</b> (guardala sul cruscotto o nell'app MG). La carica parte da qui e si ferma al target. Usala solo se l'auto non risponde via Internet.</div></div>
       <div id=msn class=sub style="margin-top:6px;color:#d29922"></div>
       <div id=msg class=sub></div>
@@ -940,6 +951,11 @@ configs:
       .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;if(j.ok)E('msp').style.display='none'})
       .catch(function(){E('msg').textContent='Errore di rete'})
       .then(function(){load();loadLogs()})}
+      function msReset(){E('msg').textContent='...';
+      fetch('/api/socreset',{method:'POST',body:'{}'})
+      .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;E('msp').style.display='none';E('msv').value=''})
+      .catch(function(){E('msg').textContent='Errore di rete'})
+      .then(function(){load();loadLogs()})}
       function once(){var on=!(LS&&LS.once);E('msg').textContent='...';
       fetch('/api/once',{method:'POST',body:JSON.stringify({on:on})})
       .then(function(r){return r.json()}).then(function(j){E('msg').textContent=j.msg;editing=0})
@@ -958,7 +974,7 @@ configs:
       var v=s.soc!=null?s.soc:s.est;
       if(s.armed&&s.est!=null&&s.src&&s.src!='cloud')v=s.est;
       E('soc').textContent=s.soc==null?'?':Math.round(s.soc)+'%'+(s.soc_man?' ✋':'');
-      E('msn').textContent=s.soc_man?'✋ % di partenza manuale: '+Math.round(s.soc)+'% inserita a mano (la carica parte da qui). Si disattiva da sola appena il cloud risponde con la lettura vera.':'';
+      E('msn').textContent=s.soc_man?'✋ % di partenza manuale: '+Math.round(s.soc)+'% inserita a mano (la carica parte da qui). Si disattiva da sola appena il cloud risponde, oppure premi Reset.':'';
       E('fill').style.width=(v==null?0:Math.max(0,Math.min(100,v)))+'%';
       E('sub').textContent=(s.soc_man?'Partenza manuale: ':'Cloud: ')+(s.age==null?'nessun dato':fa(s.age))+'\nStima: '+(s.est==null?'–':s.est.toFixed(1)+'%')+'\nFonte: '+(s.src||'–');rEta(s);
       var p=E('pill');
@@ -1041,6 +1057,8 @@ configs:
                       ok, msg = True, "Target " + str(t) + "%"
                   elif self.path == "/api/soc":
                       ok, msg = set_manual_soc(float(data.get("soc")))
+                  elif self.path == "/api/socreset":
+                      ok, msg = reset_manual_soc()
                   elif self.path == "/api/once":
                       ok, msg = once100(bool(data.get("on")))
                   else:
