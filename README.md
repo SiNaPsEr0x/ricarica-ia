@@ -32,7 +32,7 @@ Provato **solo** con questa combinazione:
 ## 🧭 Come funziona
 
 1. Colleghi il cavo → la ricarica va subito in **pausa**.
-2. Legge il **livello reale** della batteria dal cloud MG (riprova se l'auto non risponde).
+2. Legge il **livello reale** della batteria dal cloud MG (riprova se l'auto non risponde; se proprio non risponde puoi inserire tu la **% di partenza**).
 3. La ricarica parte ed è **sorvegliata** (dato dell'auto + stima di riserva sui kWh erogati).
 4. Al target → **pausa automatica**.
 
@@ -63,11 +63,13 @@ Ricarica IA prende il comando della Prism **anche se sta già erogando corrente*
 
 <table>
   <tr>
-    <td align="center"><img src="docs/img/1-attesa.webp" width="150"></td>
-    <td align="center"><img src="docs/img/2-carica.webp" width="150"></td>
-    <td align="center"><img src="docs/img/3-stop.webp" width="150"></td>
-    <td align="center"><img src="docs/img/4-cento.webp" width="150"></td>
-    <td align="center"><img src="docs/img/5-log.webp" width="150"></td>
+    <td align="center"><img src="docs/img/1-attesa.webp" width="120"></td>
+    <td align="center"><img src="docs/img/2-carica.webp" width="120"></td>
+    <td align="center"><img src="docs/img/3-stop.webp" width="120"></td>
+    <td align="center"><img src="docs/img/4-cento.webp" width="120"></td>
+    <td align="center"><img src="docs/img/5-log.webp" width="120"></td>
+    <td align="center"><img src="docs/img/7-partenza.webp" width="120"></td>
+    <td align="center"><img src="docs/img/6-manuale.webp" width="120"></td>
   </tr>
 </table>
 
@@ -148,9 +150,9 @@ La Prism resta in rete locale e punta all'IP **LAN** del Raspberry. Il telefono,
 ## 🕹️ Come si usa
 
 - Il riquadro **all'80%** (ore:min) mostra il tempo stimato allo stop, calcolato dalla potenza della Prism (`--:--` se non sta caricando). Il pulsante attivo è evidenziato.
-- **Avvia**: legge il livello e avvia la carica verso il target
+- **Avvia**: legge il livello e avvia la carica verso il target. Mentre carica il pulsante diventa **Avviato** e si riempie di verde con un'animazione, così si capisce a colpo d'occhio che sta caricando.
 - **Stop**: pausa e disarma
-- **✎ SoC manuale** (link piccolo sotto i pulsanti): inserisci a mano il SoC di partenza quando l'auto non risponde via Internet. Compare ✋ accanto al valore e l'avviso "Modalità SoC manuale"; si disattiva da sola appena il cloud invia una lettura vera (la stima si riallinea). Se la carica è già armata, ricalcola da quel valore.
+- **✎ % di partenza manuale** (link piccolo sotto i pulsanti): scrivi la percentuale che vedi sul cruscotto o nell'app MG quando l'auto non risponde via Internet, poi **✔ Imposta**. La carica parte da quel valore e si ferma al target. Compare ✋ accanto al valore con l'avviso giallo; si disattiva da sola appena il cloud invia una lettura vera (la stima si riallinea, la carica non si interrompe). **↺ Reset** annulla subito la % manuale e torna tutto in automatico.
 - **100% solo questa volta**: carica libera, poi torna al target abituale
 - **− / +**: cambia il target (20–100%)
 - **Log**: diario in tempo reale

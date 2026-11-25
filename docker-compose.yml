@@ -871,6 +871,11 @@ configs:
       #go.act{background:#2ea043;color:#fff;border-color:#7ee2a0}
       #st.act{background:#da3633;color:#fff;border-color:#ff9b95}
       #di.act{background:#6b7280;color:#fff;border-color:#c9d1d9}
+      #go.run{position:relative;overflow:hidden;background:#17432a;color:#fff;border-color:#7ee2a0}
+      #go.run:before{content:'';position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,#2ea043,#43d968);animation:gofill 2.4s ease-in-out infinite}
+      #go.run span{position:relative;z-index:1}
+      @keyframes gofill{0%{width:0;opacity:1}80%{width:100%;opacity:1}100%{width:100%;opacity:0}}
+      @media(prefers-reduced-motion:reduce){#go.run:before{animation:none;width:100%}}
       #on.act{background:#1f6feb;color:#fff;border-color:#9ecbff}
       #msg{margin-top:8px;min-height:18px}
       .rw{display:flex;align-items:center;gap:12px}
@@ -908,7 +913,7 @@ configs:
       <div class=c>
       <div class=stp><span class=sub>Target</span><button onclick="adj(-5)">−</button><input id=t type=number inputmode=numeric value=80 min=20 max=100 oninput="editing=1;mark()" onchange="adj(0)"><button onclick="adj(5)">+</button><span class=sub>%</span></div>
       <div id=tn class=sub style="margin-top:8px"></div>
-      <div class=row><button id=go onclick="act('start')">▶ Avvia</button><button id=st onclick="act('stop')">⏸ Stop</button></div>
+      <div class=row><button id=go onclick="act('start')"><span id=gi>▶</span> <span id=gt>Avvia</span></button><button id=st onclick="act('stop')">⏸ Stop</button></div>
       <div class=row><button id=on onclick="once()">🔓 100% solo questa volta</button></div>
       <div style="margin-top:10px"><button id=msb onclick="msToggle()" style="background:none;border:0;color:#8b949e;font-size:13px;padding:4px 0;text-decoration:underline">✎ % di partenza manuale</button></div>
       <div id=msp style="display:none;margin-top:8px"><div class=stp><span class=sub>% di partenza</span><input id=msv type=number inputmode=decimal min=1 max=100 placeholder="es. 45" style="flex:1;min-width:0"><span class=sub>%</span></div>
@@ -928,7 +933,7 @@ configs:
       <button id=cpb onclick="cp()">📋 Copia</button><button id=tgb onclick="tg()">▴</button></div>
       <div id=lb></div></div>
       <script>
-      var F='ALL',lines=[],LS=null,editing=0,tt=null,n=0;
+      var GR=null,F='ALL',lines=[],LS=null,editing=0,tt=null,n=0;
       var SN={idle:'Libera',waiting:'In attesa',charging:'In carica',pause:'In pausa'};
       var MN={normal:'Normale',paused:'Pausa',solar:'Solare',hybrid:'Ibrido',suspended:'Sospeso',autolimit:'Autolimit'};
       function E(i){return document.getElementById(i)}
@@ -986,6 +991,7 @@ configs:
       E('pm').textContent=s.pmode==null?'–':(MN[s.pmode]||s.pmode);
       E('pw').textContent=fw(s.w);
       E('on').textContent=s.once?'↩ Annulla 100%':'🔓 100% solo questa volta';
+      var run=s.pstate=='charging'&&!s.pstale;if(run!==GR){GR=run;E('go').classList.toggle('run',run);E('gt').textContent=run?'Avviato':'Avvia';E('gi').textContent=run?'':'▶'}
       var a=s.once?'on':(s.armed||s.acquiring)?'go':s.pstate=='charging'?'':(s.pstate=='pause'||s.pmode=='paused')?'st':'';
       ['go','st','on'].forEach(function(k){E(k).classList.toggle('act',k==a)});
       document.title=(s.soc==null?'':Math.round(s.soc)+'% · ')+'Ricarica IA';mark()})
