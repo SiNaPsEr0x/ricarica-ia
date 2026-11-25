@@ -265,7 +265,7 @@ configs:
                start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
                stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
                base=load_target(), once=_once0, once_seen=False, once_idle=0, cur=None, off_boot=False,
-               ses=_ses0, take_ts=0)
+               ses=_ses0, take_ts=0, blind=False)
 
       def _save_locked():
           try:
@@ -442,7 +442,7 @@ configs:
               time.sleep(5)
           return None
 
-      def arm(target, soc):
+      def arm(target, soc, blind=False):
           if not 20 <= target <= 100:
               return False, "Target non valido"
           if soc >= target:
@@ -452,7 +452,7 @@ configs:
           with lock:
               S.update(armed=True, target=target, start_soc=soc, soc0=soc, e_wh=0.0,
                        armed_at=time.time(), cal_ts=time.time(), stop_tries=0,
-                       hold=False, free=False, src="", cur=soc)
+                       hold=False, free=False, src="", cur=soc, blind=blind)
               _ses_locked("armed")
           start_charge()
           log("Avvio da %.0f%% verso %d%%" % (soc, target))
@@ -557,8 +557,15 @@ configs:
           with lock:
               S["acquiring"] = False
           if soc is None:
-              log("Avvia manuale: SoC non ricevuto, non avvio")
-              return False, "SoC non ricevuto: non avvio"
+              with lock:
+                  last, last_ts = S["soc"], S["soc_ts"]
+              if last is None:
+                  log("Avvia manuale: nessun SoC noto, non avvio")
+                  return False, "SoC mai ricevuto: non avvio"
+              age = int(time.time() - last_ts) if last_ts else -1
+              log("Avvia manuale: SoC non ricevuto, parto dall'ultimo noto (%.0f%%, %d s fa) e riprovo strada facendo" % (last, age))
+              soc = last
+              return arm(target, soc, True)
           return arm(target, soc)
 
       def stop():
@@ -635,11 +642,12 @@ configs:
                       if S["pstate"] == "charging" and S["w"] is not None:
                           S["e_wh"] += S["w"] * dt / 3600.0
                       fresh = S["soc_ts"] > S["armed_at"] and now - S["soc_ts"] < STALE_SEC
-                      sync = fresh and S["soc0"] is not None and S["soc"] > S["soc0"] + 0.05
+                      sync = fresh and S["soc0"] is not None and (S["blind"] or S["soc"] > S["soc0"] + 0.05)
                       if sync and S["soc_ts"] > S["cal_ts"]:
                           S["start_soc"] = S["soc"]
                           S["e_wh"] = 0.0
                           S["cal_ts"] = S["soc_ts"]
+                          S["blind"] = False
                           log("Stima riallineata al cloud: %.1f%%" % S["soc"])
                       est = estimate()
                       if sync:
