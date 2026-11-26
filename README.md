@@ -40,7 +40,7 @@ Solo la lettura della batteria passa dal cloud, e solo a cavo inserito. I comand
 
 ### 🛑 Come decide lo stop
 
-- **Stima di riserva** = livello di partenza + kWh erogati dalla Prism × rendimento (`CHARGE_EFFICIENCY`, 0,92) ÷ capacità. Si ricalibra a ogni dato fresco del cloud.
+- **Stima di riserva** = livello di partenza + kWh erogati dalla Prism × rendimento (`CHARGE_EFFICIENCY`, 0,92) ÷ capacità. Si ricalibra a ogni dato fresco del cloud. Il rendimento si **auto-apprende**: ogni volta che il cloud sale di almeno `EFF_LEARN_PTS` punti, confronta i punti guadagnati con i kWh misurati dalla colonnina e corregge il valore (salvato in `/deps/eff`, resta tra una carica e l'altra).
 - Si ferma quando il **dato cloud** (non più vecchio di 10 min) raggiunge il target. Se il cloud non risponde o è vecchio, decide la **stima**.
 - Se il cloud è in ritardo ma la stima supera il target di `EST_MARGIN` (1 punto), vince la stima ("stima di sicurezza").
 - **Sforamento massimo teorico: circa `EST_MARGIN` punti %.** A 2,8 kW la stima avanza di circa 0,2 punti ogni 2 minuti, che è l'intervallo di aggiornamento vicino al target.
@@ -113,8 +113,9 @@ Nel servizio `ev-limiter` dello stack (scheda **Editor** di Portainer, oppure [`
 | `ACQUIRE_SEC` | `300` | Quanto aspetta il livello batteria al collegamento; poi resta in pausa e riprova più lentamente |
 | `REFRESH_SEC` | `120` | Secondi tra due richieste al cloud a meno di 3 punti dal target |
 | `REFRESH_FAR_SEC` | `600` | Come sopra, quando il target è più lontano |
-| `REFRESH_EARLY_SEC` | `30,60,120,240` | Richieste extra al cloud subito dopo l'avvio (secondi dall'avvio; la prima richiesta parte già al collegamento del cavo), quando l'auto appena entrata in box ha ancora segnale. Vuoto = disattivate |
-| `CHARGE_EFFICIENCY` | `0.92` | Rendimento usato dalla stima (energia in batteria ÷ energia dalla Prism) |
+| `REFRESH_EARLY_SEC` | `30,60,120,240` | Richieste extra al cloud subito dopo l'avvio (secondi dall'avvio; la prima richiesta parte già al collegamento del cavo), quando l'auto appena entrata in box ha ancora segnale. Si fermano appena arriva il primo dato cloud utile. Vuoto = disattivate |
+| `CHARGE_EFFICIENCY` | `0.92` | Rendimento iniziale della stima (energia in batteria ÷ energia dalla Prism); poi viene sostituito da quello appreso |
+| `EFF_LEARN_PTS` | `3` | Punti di SoC cloud minimi tra due letture per misurare il rendimento |
 | `EST_MARGIN` | `1.0` | Punti % oltre il target dopo cui la stima ferma comunque la carica |
 | `SOC_STALE_SEC` | `600` | Oltre questa età il dato del cloud non è più considerato fresco |
 | `GW_OFF` | `true` | Spegne il polling periodico del gateway: le richieste le fa solo Ricarica IA |

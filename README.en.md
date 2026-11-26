@@ -40,7 +40,7 @@ Only the battery reading goes through the cloud, and only while the cable is plu
 
 ### 🛑 How the stop is decided
 
-- **Backup estimate** = starting level + kWh delivered by the Prism × efficiency (`CHARGE_EFFICIENCY`, 0.92) ÷ capacity. It is recalibrated on every fresh cloud reading.
+- **Backup estimate** = starting level + kWh delivered by the Prism × efficiency (`CHARGE_EFFICIENCY`, 0.92) ÷ capacity. It is recalibrated on every fresh cloud reading. The efficiency is **self-learned**: whenever the cloud rises by at least `EFF_LEARN_PTS` points, the points gained are compared with the kWh measured by the charger and the value is corrected (saved in `/deps/eff`, kept across sessions).
 - It stops when the **cloud reading** (no older than 10 min) reaches the target. If the cloud doesn't answer or is stale, the **estimate** decides.
 - If the cloud lags but the estimate exceeds the target by `EST_MARGIN` (1 point), the estimate wins ("safety estimate").
 - **Maximum theoretical overshoot: about `EST_MARGIN` percentage points.** At 2.8 kW the estimate advances about 0.2 points every 2 minutes, which is the refresh interval near the target.
@@ -113,8 +113,9 @@ In the `ev-limiter` service of the stack (Portainer **Editor** tab, or [`docker-
 | `ACQUIRE_SEC` | `300` | How long it waits for the battery level on plug-in; then it stays paused and retries more slowly |
 | `REFRESH_SEC` | `120` | Seconds between cloud requests within 3 points of the target |
 | `REFRESH_FAR_SEC` | `600` | Same, when the target is further away |
-| `REFRESH_EARLY_SEC` | `30,60,120,240` | Extra cloud requests right after start (seconds from start; the first request is already sent on plug-in), while the car just parked still has signal. Empty = disabled |
-| `CHARGE_EFFICIENCY` | `0.92` | Efficiency used by the estimate (energy into the battery ÷ energy from the Prism) |
+| `REFRESH_EARLY_SEC` | `30,60,120,240` | Extra cloud requests right after start (seconds from start; the first request is already sent on plug-in), while the car just parked still has signal. They stop as soon as the first useful cloud reading arrives. Empty = disabled |
+| `CHARGE_EFFICIENCY` | `0.92` | Initial efficiency of the estimate (energy into the battery ÷ energy from the Prism); then replaced by the learned one |
+| `EFF_LEARN_PTS` | `3` | Minimum cloud SoC points between two readings to measure the efficiency |
 | `EST_MARGIN` | `1.0` | Percentage points above the target after which the estimate stops charging anyway |
 | `SOC_STALE_SEC` | `600` | Older than this, the cloud reading is no longer considered fresh |
 | `GW_OFF` | `true` | Turns off the gateway's periodic polling: only Ricarica IA makes requests |
