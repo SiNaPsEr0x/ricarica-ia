@@ -246,6 +246,18 @@ configs:
           return DEF_TARGET
 
       SFILE = "/deps/state.json"
+      EFILE = "/deps/eff"
+      EFF_LEARN_PTS = float(os.getenv("EFF_LEARN_PTS", "3"))
+
+      def load_eff():
+          try:
+              with open(EFILE) as f:
+                  v = float(f.read().strip())
+              if 0.7 <= v <= 1.0:
+                  return v
+          except Exception:
+              pass
+          return EFF
 
       def load_state():
           try:
@@ -283,7 +295,8 @@ configs:
                start_soc=None, soc0=None, cal_ts=0, e_wh=0.0, armed_at=0,
                stop_tries=0, cmd_ts=0, hold=False, free=False, off_ts=0, src="",
                base=load_target(), once=_once0, once_seen=False, once_idle=0, cur=None, off_boot=False,
-               ses=_ses0, take_ts=0, blind=False, p_ts=time.time(), pstale=False)
+               ses=_ses0, take_ts=0, blind=False, p_ts=time.time(), pstale=False,
+               eff=load_eff(), e_tot=0.0, anc_soc=None, anc_e=0.0, synced=False)
 
       def _save_locked():
           try:
@@ -436,7 +449,30 @@ configs:
       def estimate():
           if S["start_soc"] is None:
               return None
-          return S["start_soc"] + S["e_wh"] / 1000.0 * EFF / CAP * 100.0
+          return S["start_soc"] + S["e_wh"] / 1000.0 * S["eff"] / CAP * 100.0
+
+      def learn_eff_locked():
+          soc, e = S["soc"], S["e_tot"]
+          if S["anc_soc"] is None:
+              S["anc_soc"], S["anc_e"] = soc, e
+              return
+          dsoc = soc - S["anc_soc"]
+          de = e - S["anc_e"]
+          if dsoc < EFF_LEARN_PTS or de <= 0:
+              return
+          meas = dsoc / 100.0 * CAP * 1000.0 / de
+          S["anc_soc"], S["anc_e"] = soc, e
+          if not 0.7 <= meas <= 1.0:
+              log("Efficienza misurata fuori scala (%.2f): ignorata" % meas)
+              return
+          old = S["eff"]
+          S["eff"] = round(old + 0.5 * (meas - old), 3)
+          try:
+              with open(EFILE, "w") as f:
+                  f.write(str(S["eff"]))
+          except Exception:
+              pass
+          log("Efficienza misurata %.2f (+%.1f punti con %.2f kWh dalla colonnina): uso %.3f (prima %.3f)" % (meas, dsoc, de / 1000.0, S["eff"], old))
 
       def eta_sec():
           if not S["armed"] or S["pstate"] != "charging" or S["target"] >= 100:
@@ -444,7 +480,7 @@ configs:
           w, cur = S["w"], S["cur"]
           if w is None or w < 100 or cur is None:
               return None
-          rem_wh = (S["target"] - cur) / 100.0 * CAP * 1000.0 / EFF
+          rem_wh = (S["target"] - cur) / 100.0 * CAP * 1000.0 / S["eff"]
           if rem_wh <= 0:
               return 0
           return int(rem_wh / w * 3600)
@@ -480,7 +516,9 @@ configs:
           with lock:
               S.update(armed=True, target=target, start_soc=soc, soc0=soc, e_wh=0.0,
                        armed_at=time.time(), cal_ts=time.time(), stop_tries=0,
-                       hold=False, free=False, src="", cur=soc, blind=blind, est_saved=0)
+                       hold=False, free=False, src="", cur=soc, blind=blind, est_saved=0,
+                       e_tot=0.0, anc_e=0.0, synced=False,
+                       anc_soc=None if (blind or S["soc_man"]) else soc)
               _ses_locked("armed")
           start_charge()
           log("Avvio da %.0f%% verso %d%%" % (soc, target))
@@ -708,6 +746,7 @@ configs:
                           miss = 0
                       if S["pstate"] == "charging" and S["w"] is not None:
                           S["e_wh"] += S["w"] * dt / 3600.0
+                          S["e_tot"] += S["w"] * dt / 3600.0
                       fresh = S["soc_ts"] > S["armed_at"] and now - S["soc_ts"] < STALE_SEC
                       sync = fresh and S["soc0"] is not None and (S["blind"] or S["soc"] > S["soc0"] + 0.05)
                       if sync and S["soc_ts"] > S["cal_ts"]:
@@ -715,6 +754,9 @@ configs:
                           S["e_wh"] = 0.0
                           S["cal_ts"] = S["soc_ts"]
                           S["blind"] = False
+                          S["synced"] = True
+                          if not S["soc_man"]:
+                              learn_eff_locked()
                           log(("Stima riallineata alla %% di partenza manuale: %.1f%%" if S["soc_man"] else "Stima riallineata al cloud: %.1f%%") % S["soc"])
                       est = estimate()
                       if sync:
@@ -744,7 +786,7 @@ configs:
                           _ses_locked("done")
                           log("Timeout di sicurezza: pausa")
                       elif S["prefix"] and S["pstate"] == "charging" \
-                              and (any(S["armed_at"] + o <= now and last_refresh < S["armed_at"] + o for o in REFRESH_EARLY)
+                              and ((not S["synced"] and any(S["armed_at"] + o <= now and last_refresh < S["armed_at"] + o for o in REFRESH_EARLY))
                                    or now - last_refresh > min((REFRESH_FAR_SEC if cur is not None and S["target"] - cur > 3 else REFRESH_SEC) * (2 ** miss), 600)):
                           miss = miss + 1 if (sent and S["soc_ts"] <= sent) else 0
                           refresh_topic = S["prefix"] + "/refresh/mode/set"
@@ -1032,7 +1074,7 @@ configs:
       document.title=(v==null?'':(ue?'~':'')+Math.round(v)+'% · ')+'Ricarica IA';mark()})
       .catch(function(){var p=E('pill');p.className='pill';p.textContent='⚠️ Offline'})}
       function sumTxt(){var s=LS;if(!s)return 'stato n/d';
-      return 'SoC '+(s.soc_man?'PARTENZA MANUALE ':'cloud ')+(s.soc==null?'?':s.soc.toFixed(0)+'%')+' ('+(s.age==null?'-':s.age+'s fa')+') | stima '+(s.est==null?'-':s.est.toFixed(1)+'%')+' | fonte '+(s.src||'-')+' | Prism '+s.pstate+'/'+s.pmode+'/'+(s.w==null?'-':s.w)+'W | armato '+s.armed+' target '+s.target+'% (base '+s.base+'%, una tantum '+s.once+') | attesa SoC '+s.acquiring}
+      return 'SoC '+(s.soc_man?'PARTENZA MANUALE ':'cloud ')+(s.soc==null?'?':s.soc.toFixed(0)+'%')+' ('+(s.age==null?'-':s.age+'s fa')+') | stima '+(s.est==null?'-':s.est.toFixed(1)+'%')+' | fonte '+(s.src||'-')+' | eff '+(s.eff==null?'-':s.eff.toFixed(3))+' | Prism '+s.pstate+'/'+s.pmode+'/'+(s.w==null?'-':s.w)+'W | armato '+s.armed+' target '+s.target+'% (base '+s.base+'%, una tantum '+s.once+') | attesa SoC '+s.acquiring}
       function vis(){var o=[];for(var i=0;i<lines.length;i++){var l=lines[i];var tag=l.substr(9,4).trim();if(F=='ALL'||tag==F||tag=='----')o.push(l)}return o}
       function render(){var box=E('lb');var nb=box.scrollTop+box.clientHeight>=box.scrollHeight-30;box.textContent='';
       var v=vis();for(var i=0;i<v.length;i++){var l=v[i];var tag=l.substr(9,4).trim();var d=document.createElement('div');var c='';
