@@ -715,7 +715,18 @@ configs:
               last_t = now
               do_pause = False
               refresh_topic = None
+              recheck = None
               with lock:
+                  ses, ps = S["ses"], S["pstate"]
+                  if AUTO_ARM and not S["acquiring"] and not S["armed"] and not S["hold"] \
+                          and not S["free"] and not S["pstale"] and ses not in ("stopped", "free") \
+                          and now - S["cmd_ts"] > 20 and now - S["take_ts"] > TAKEOVER_COOLDOWN and (
+                              (ses is None and ps in ("waiting", "charging")) or
+                              (TAKEOVER and ses == "armed" and ps in ("waiting", "charging", "pause")) or
+                              (TAKEOVER and ses == "done" and ps == "charging")):
+                      S["take_ts"] = now
+                      S["acquiring"] = True
+                      recheck = (now, "Ricontrollo: Prism %s senza controllo" % ps)
                   if S["stop_tries"] > 0:
                       if S["pmode"] == "paused":
                           S["stop_tries"] = 0
@@ -794,6 +805,8 @@ configs:
                           last_refresh = now
               if do_pause:
                   set_mode(3)
+              if recheck:
+                  threading.Thread(target=auto_arm, args=recheck, daemon=True).start()
               if refresh_topic:
                   client.publish(refresh_topic, "force")
 
