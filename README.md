@@ -113,6 +113,7 @@ Nel servizio `ev-limiter` dello stack (scheda **Editor** di Portainer, oppure [`
 | `ACQUIRE_SEC` | `300` | Quanto aspetta il livello batteria al collegamento; poi resta in pausa e riprova più lentamente |
 | `REFRESH_SEC` | `120` | Secondi tra due richieste al cloud a meno di 3 punti dal target |
 | `REFRESH_FAR_SEC` | `600` | Come sopra, quando il target è più lontano |
+| `REFRESH_EARLY_SEC` | `30,60,120,240` | Richieste extra al cloud subito dopo l'avvio (secondi dall'avvio; la prima richiesta parte già al collegamento del cavo), quando l'auto appena entrata in box ha ancora segnale. Vuoto = disattivate |
 | `CHARGE_EFFICIENCY` | `0.92` | Rendimento usato dalla stima (energia in batteria ÷ energia dalla Prism) |
 | `EST_MARGIN` | `1.0` | Punti % oltre il target dopo cui la stima ferma comunque la carica |
 | `SOC_STALE_SEC` | `600` | Oltre questa età il dato del cloud non è più considerato fresco |
