@@ -83,6 +83,7 @@ services:
       ACQUIRE_SEC: "300"
       REFRESH_SEC: "120"
       REFRESH_FAR_SEC: "600"
+      REFRESH_EARLY_SEC: "90,180,300"
       CHARGE_EFFICIENCY: "0.92"
       EST_MARGIN: "1.0"
       SOC_STALE_SEC: "600"
@@ -139,6 +140,7 @@ configs:
       ACQUIRE_SEC = int(os.getenv("ACQUIRE_SEC", "300"))
       REFRESH_SEC = int(os.getenv("REFRESH_SEC", "120"))
       REFRESH_FAR_SEC = int(os.getenv("REFRESH_FAR_SEC", "600"))
+      REFRESH_EARLY = sorted(int(x) for x in os.getenv("REFRESH_EARLY_SEC", "90,180,300").replace(" ", "").split(",") if x.isdigit())
       STALE_SEC = int(os.getenv("SOC_STALE_SEC", "600"))
       PRISM_STALE_SEC = int(os.getenv("PRISM_STALE_SEC", "900"))
       EST_MARGIN = float(os.getenv("EST_MARGIN", "1.0"))
@@ -742,7 +744,8 @@ configs:
                           _ses_locked("done")
                           log("Timeout di sicurezza: pausa")
                       elif S["prefix"] and S["pstate"] == "charging" \
-                              and now - last_refresh > min((REFRESH_FAR_SEC if cur is not None and S["target"] - cur > 3 else REFRESH_SEC) * (2 ** miss), 600):
+                              and (any(S["armed_at"] + o <= now and last_refresh < S["armed_at"] + o for o in REFRESH_EARLY)
+                                   or now - last_refresh > min((REFRESH_FAR_SEC if cur is not None and S["target"] - cur > 3 else REFRESH_SEC) * (2 ** miss), 600)):
                           miss = miss + 1 if (sent and S["soc_ts"] <= sent) else 0
                           refresh_topic = S["prefix"] + "/refresh/mode/set"
                           sent = now

@@ -113,6 +113,7 @@ In the `ev-limiter` service of the stack (Portainer **Editor** tab, or [`docker-
 | `ACQUIRE_SEC` | `300` | How long it waits for the battery level on plug-in; then it stays paused and retries more slowly |
 | `REFRESH_SEC` | `120` | Seconds between cloud requests within 3 points of the target |
 | `REFRESH_FAR_SEC` | `600` | Same, when the target is further away |
+| `REFRESH_EARLY_SEC` | `90,180,300` | Extra cloud requests in the first minutes after start (seconds from start), while the car just parked still has signal. Empty = disabled |
 | `CHARGE_EFFICIENCY` | `0.92` | Efficiency used by the estimate (energy into the battery ÷ energy from the Prism) |
 | `EST_MARGIN` | `1.0` | Percentage points above the target after which the estimate stops charging anyway |
 | `SOC_STALE_SEC` | `600` | Older than this, the cloud reading is no longer considered fresh |
