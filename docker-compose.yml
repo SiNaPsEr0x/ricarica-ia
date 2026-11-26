@@ -298,11 +298,8 @@ configs:
               S["ses"] = v
               _save_locked()
 
-      def now_s():
-          return time.strftime("%H:%M:%S ")
-
       def log(m):
-          LOG.append(now_s() + m)
+          LOG.append((time.time(), m))
 
       def short(t):
           return t.split("/vehicles/")[-1].split("/", 1)[-1] if "/vehicles/" in t else t
@@ -336,14 +333,14 @@ configs:
           spawn = None
           off_topic = None
           if t.startswith("saic/") and not msg.retain:
-              MQ.append(now_s() + short(t) + " = " + p[:60])
+              MQ.append((time.time(), short(t) + " = " + p[:60]))
           with lock:
               now = time.time()
               if not msg.retain and t in (T("state"), T("mode"), T("w")):
                   S["p_ts"] = now
                   if S["pstale"]:
                       S["pstale"] = False
-                      LOG.append(now_s() + "Prism di nuovo online")
+                      LOG.append((time.time(), "Prism di nuovo online"))
               if t.startswith("saic/") and "/drivetrain/" in t:
                   S["prefix"] = t.split("/drivetrain/")[0]
                   if GW_OFF and not S["off_boot"]:
@@ -370,7 +367,7 @@ configs:
               elif t == T("state"):
                   prev = S["pstate"]
                   S["pstate"] = idx(STATES, p)
-                  MQ.append(now_s() + "prism/state = " + str(S["pstate"]) + " (" + p + ")")
+                  MQ.append((time.time(), "prism/state = " + str(S["pstate"]) + " (" + p + ")"))
                   WAKE.set()
                   if S["pstate"] == "idle":
                       S["hold"] = False
@@ -404,7 +401,7 @@ configs:
                       spawn = (now, why)
               elif t == T("mode"):
                   S["pmode"] = idx(MODES, p)
-                  MQ.append(now_s() + "prism/mode = " + str(S["pmode"]) + " (" + p + ")")
+                  MQ.append((time.time(), "prism/mode = " + str(S["pmode"]) + " (" + p + ")"))
               elif t == T("w"):
                   try:
                       S["w"] = float(p)
@@ -422,7 +419,7 @@ configs:
 
       def set_mode(n):
           S["cmd_ts"] = time.time()
-          MQ.append(now_s() + "TX prism set_mode " + str(n))
+          MQ.append((time.time(), "TX prism set_mode " + str(n)))
           client.publish(T("command/set_mode"), str(n), qos=1)
           WAKE.set()
 
@@ -664,7 +661,7 @@ configs:
               with lock:
                   if time.time() - S["p_ts"] > PRISM_STALE_SEC and not S["pstale"]:
                       S["pstale"] = True
-                      LOG.append(now_s() + "ATTENZIONE: Prism non pubblica da oltre %d s (offline?), stato e comandi non affidabili" % PRISM_STALE_SEC)
+                      LOG.append((time.time(), "ATTENZIONE: Prism non pubblica da oltre %d s (offline?), stato e comandi non affidabili" % PRISM_STALE_SEC))
                   quiet = S["pstate"] in (None, "idle") and not S["armed"] and not S["hold"] \
                       and not S["acquiring"] and S["stop_tries"] == 0
               if quiet:
@@ -809,33 +806,45 @@ configs:
           try:
               ts, rest = line.split(" ", 1)
               t = calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
-              return time.strftime("%H:%M:%S ", time.localtime(t)) + rest
+              frac = ts[19:].rstrip("Z")
+              if frac.startswith("."):
+                  t += float("0" + frac[:10])
+              return t, rest
           except Exception:
-              return now_s() + line
+              return time.time(), line
 
       def clog(svc):
           try:
               cid = containers().get(svc)
               if not cid:
-                  return [now_s() + "container " + svc + " non trovato"]
+                  return [(time.time(), "container " + svc + " non trovato")]
               st, body = dget("/containers/" + cid + "/logs?stdout=1&stderr=1&timestamps=1&tail=60")
               if st != 200:
-                  return [now_s() + "log " + svc + " non leggibile: HTTP " + str(st)]
+                  return [(time.time(), "log " + svc + " non leggibile: HTTP " + str(st))]
               txt = ANSI.sub("", demux(body))
               return [lt(l) for l in txt.splitlines() if l.strip()]
           except Exception as e:
-              return [now_s() + "log " + svc + " non leggibile: " + str(e)[:80]]
+              return [(time.time(), "log " + svc + " non leggibile: " + str(e)[:80])]
 
       LC = {"t": 0, "v": []}
 
       def all_logs():
           if time.time() - LC["t"] < 2:
               return LC["v"]
-          items = [("APP", l) for l in list(LOG)] + [("MQTT", l) for l in list(MQ)]
+          items = [(t, "APP", m) for t, m in list(LOG)] + [(t, "MQTT", m) for t, m in list(MQ)]
           for svc, tag in (("saic-gateway", "GW"), ("mosquitto", "BRK")):
-              items += [(tag, l) for l in clog(svc)]
-          items.sort(key=lambda x: x[1][:8])
-          out = [l[:9] + t.ljust(4) + " " + l[9:][:300] for t, l in items][-300:]
+              items += [(t, tag, m) for t, m in clog(svc)]
+          items.sort(key=lambda x: x[0])
+          items = items[-300:]
+          out = []
+          day = time.strftime("%d/%m/%Y")
+          last = None
+          for t, tag, m in items:
+              d = time.strftime("%d/%m/%Y", time.localtime(t))
+              if d != last and (last is not None or d != day):
+                  out.append(time.strftime("%H:%M:%S ", time.localtime(t)) + "----" + " ---- " + d + " ----")
+              last = d
+              out.append(time.strftime("%H:%M:%S ", time.localtime(t)) + tag.ljust(4) + " " + m[:300])
           LC["v"] = out
           LC["t"] = time.time()
           return out
@@ -1021,7 +1030,7 @@ configs:
       .catch(function(){var p=E('pill');p.className='pill';p.textContent='⚠️ Offline'})}
       function sumTxt(){var s=LS;if(!s)return 'stato n/d';
       return 'SoC '+(s.soc_man?'PARTENZA MANUALE ':'cloud ')+(s.soc==null?'?':s.soc.toFixed(0)+'%')+' ('+(s.age==null?'-':s.age+'s fa')+') | stima '+(s.est==null?'-':s.est.toFixed(1)+'%')+' | fonte '+(s.src||'-')+' | Prism '+s.pstate+'/'+s.pmode+'/'+(s.w==null?'-':s.w)+'W | armato '+s.armed+' target '+s.target+'% (base '+s.base+'%, una tantum '+s.once+') | attesa SoC '+s.acquiring}
-      function vis(){var o=[];for(var i=0;i<lines.length;i++){var l=lines[i];var tag=l.substr(9,4).trim();if(F=='ALL'||tag==F)o.push(l)}return o}
+      function vis(){var o=[];for(var i=0;i<lines.length;i++){var l=lines[i];var tag=l.substr(9,4).trim();if(F=='ALL'||tag==F||tag=='----')o.push(l)}return o}
       function render(){var box=E('lb');var nb=box.scrollTop+box.clientHeight>=box.scrollHeight-30;box.textContent='';
       var v=vis();for(var i=0;i<v.length;i++){var l=v[i];var tag=l.substr(9,4).trim();var d=document.createElement('div');var c='';
       if(tag!='MQTT'&&/error|errore|fail|exception|revoked|traceback|non ricevuto|non leggibile|non trovato/i.test(l))c='e';else if(tag!='MQTT'&&/warn|timeout/i.test(l))c='w';
