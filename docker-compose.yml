@@ -1009,8 +1009,8 @@ configs:
       function load(){fetch('/api/status').then(function(r){return r.json()}).then(function(s){LS=s;
       if(!editing)E('t').value=s.once?s.base:s.target;
       var v=s.soc!=null?s.soc:s.est;
-      if(s.armed&&s.est!=null&&s.src&&s.src!='cloud')v=s.est;
-      E('soc').textContent=s.soc==null?'?':Math.round(s.soc)+'%'+(s.soc_man?' ✋':'');
+      var ue=s.armed&&s.est!=null&&s.src&&s.src!='cloud'&&s.src!='manuale';if(ue)v=s.est;if(s.soc==null&&s.est!=null)ue=true;
+      E('soc').textContent=v==null?'?':(ue?'~':'')+Math.round(v)+'%'+(!ue&&s.soc_man?' ✋':'');
       E('msn').textContent=s.soc_man?'✋ % di partenza manuale: '+Math.round(s.soc)+'% inserita a mano (la carica parte da qui). Si disattiva da sola appena il cloud risponde, oppure premi Reset.':'';
       E('fill').style.width=(v==null?0:Math.max(0,Math.min(100,v)))+'%';
       E('sub').textContent=(s.soc_man?'Partenza manuale: ':(s.soc_est?'Stima salvata: ':'Cloud: '))+(s.age==null?'nessun dato':fa(s.age))+'\nStima: '+(s.est==null?'–':s.est.toFixed(1)+'%')+'\nFonte: '+(s.src||'–');rEta(s);
@@ -1026,7 +1026,7 @@ configs:
       var run=s.pstate=='charging'&&!s.pstale;if(run!==GR){GR=run;E('go').classList.toggle('run',run);E('gt').textContent=run?'Avviato':'Avvia';E('gi').textContent=run?'':'▶'}
       var a=s.once?'on':(s.armed||s.acquiring)?'go':s.pstate=='charging'?'':(s.pstate=='pause'||s.pmode=='paused')?'st':'';
       ['go','st','on'].forEach(function(k){E(k).classList.toggle('act',k==a)});
-      document.title=(s.soc==null?'':Math.round(s.soc)+'% · ')+'Ricarica IA';mark()})
+      document.title=(v==null?'':(ue?'~':'')+Math.round(v)+'% · ')+'Ricarica IA';mark()})
       .catch(function(){var p=E('pill');p.className='pill';p.textContent='⚠️ Offline'})}
       function sumTxt(){var s=LS;if(!s)return 'stato n/d';
       return 'SoC '+(s.soc_man?'PARTENZA MANUALE ':'cloud ')+(s.soc==null?'?':s.soc.toFixed(0)+'%')+' ('+(s.age==null?'-':s.age+'s fa')+') | stima '+(s.est==null?'-':s.est.toFixed(1)+'%')+' | fonte '+(s.src||'-')+' | Prism '+s.pstate+'/'+s.pmode+'/'+(s.w==null?'-':s.w)+'W | armato '+s.armed+' target '+s.target+'% (base '+s.base+'%, una tantum '+s.once+') | attesa SoC '+s.acquiring}
